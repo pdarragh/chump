@@ -30,9 +30,9 @@ help:
 	@echo "                            where <dir> is one of:"
 	@echo "                            $(ASSIGNMENTS)"
 
-$(PDF_TARGETS): ./%.pdf: $(filter ./$*/%,$(SOURCE_FILES))
-	$(PANDOC) --resource-path "$*" -f markdown "$(filter ./$*/%.md,$(SOURCE_FILES))" -o "$@"
-	@echo "Built $@."
-
 $(ASSIGNMENTS):
 	@$(MAKE) -f $(THIS_MAKEFILE) $@.pdf
+
+$(PDF_TARGETS): %.pdf: $(SOURCE_FILES)
+	$(PANDOC) --resource-path "$*" -f markdown "$(sort $(filter ./$*/%.md,$(SOURCE_FILES)))" -o "$@"
+	@echo "Built $@."
