@@ -1,16 +1,14 @@
-From Coq Require Import List String ZArith.
+From Coq Require Import List String ZArith FSets.FMapPositive Lia.
 
 Import ListNotations.
 Local Open Scope list_scope.
 
-From ExtLib.Structures Require Import Monad Traversable.
+From ExtLib.Structures Require Import Monad Traversable Foldable Reducible.
 From ExtLib.Data Require Import List.
 From ExtLib.Data.Monads Require Import OptionMonad.
 
 Import MonadNotation.
 Open Scope monad_scope.
-
-Require Import Map.
 
 
 Set Implicit Arguments.
@@ -31,19 +29,19 @@ Inductive exp :=
 | Op1 (o : op1) (e : exp)
 | Op2 (o : op2) (e1 : exp) (e2 : exp).
 
-Inductive s :=
+Inductive c :=
 | Noop
-| Let (e : exp) (body : s)
-| LetInput (body : s)
+| Let (e : exp) (body : c)
+| LetInput (body : c)
 | Assign (l : pexp) (e : exp)
-| If (e : exp) (thn: s) (els : s)
-| Loop (body : s)
+| If (e : exp) (thn: c) (els : c)
+| Loop (body : c)
 | Break (n : nat)
 | Output (e : exp)
-| Seq (s1 : s) (s2 : s)
+| Seq (s1 : c) (s2 : c)
 | Checkpoint (ls : list pexp).
 
-Definition addr := nat.
+Definition addr := positive.
 
 Inductive env :=
 | Top (f : list addr)
@@ -70,25 +68,61 @@ Definition lookup_env (e : env) (v : var) : option addr :=
 Inductive val :=
 | vInt (i : Z)
 | vBool (b : bool)
-| vPtr (p : addr).
+| vPtr (p : addr)
+| vNull.
 
-Definition store := list val.
+Record store := mkStore { st_next : positive ; st_map : PositiveMap.t val }.
+
+Definition lookup_store (s : store) (a : addr) :=
+  PositiveMap.find a (st_map s).
+
+Definition store_add (s : store) (a : addr) (v : val) :=
+  mkStore (st_next s) (PositiveMap.add a v (st_map s)).
+
+Definition store_add_next (s : store) (v : val) :=
+  mkStore (Pos.succ (st_next s)) (PositiveMap.add (st_next s) v (st_map s)).
+
+Definition init_store := mkStore xH (PositiveMap.empty val).
+
+Definition store_wf (s : store) :=
+  forall a, (st_next s <= a)%positive -> PositiveMap.find a (st_map s) = None.
+
+Lemma init_store_wf : store_wf init_store.
+Proof.
+  unfold store_wf, init_store.
+  cbn.
+  intros.
+  apply PositiveMap.gempty.
+Qed.
+
+Lemma store_wf_add_next_wf : forall s v, store_wf s -> store_wf (store_add_next s v).
+Proof.
+  unfold store_wf, store_add_next.
+  cbn.
+  intros s v H a Hle.
+  rewrite PositiveMapAdditionalFacts.gsspec.
+  destruct (PositiveMap.E.eq_dec a (st_next s)).
+  - lia.
+  - apply H. lia.
+Qed.
 
 Inductive kont :=
 | kMt
 | kEndIf (k : kont)
-| kSeq (s2 : s) (k : kont)
-| kLoop (body : s) (k : kont).
+| kSeq (s2 : c) (k : kont)
+| kLoop (body : c) (k : kont).
 
+(*
 Definition update_rev_nth {A} (l : list A) n v := rev (firstn n (rev l) ++ [v] ++ skipn (S n) (rev l)).
 Definition rev_nth_error {A} (l : list A) n := nth_error (rev l) n.
+*)
 
 Fixpoint eval_pexp E St p : option addr :=
   match p with
   | Var x => lookup_env E x
   | Deref p =>
     l <- eval_pexp E St p ;;
-    v <- rev_nth_error St l ;;
+    v <- lookup_store St l ;;
     match v with
     | vPtr p => ret p
     | _ => None
@@ -120,7 +154,7 @@ Fixpoint eval (E : env) (St : store) (e : exp) : option val :=
     ret (vPtr ptr)
   | Load p =>
     ptr <- eval_pexp E St p ;;
-    rev_nth_error St ptr
+    lookup_store St ptr
   | Op1 o e =>
     v <- eval E St e ;;
     eval_op1 o v
@@ -130,19 +164,19 @@ Fixpoint eval (E : env) (St : store) (e : exp) : option val :=
     eval_op2 o v1 v2
   end.
 
-Fixpoint do_break n k m : option (kont * nat) :=
-  match k with
-  | kEndIf k => do_break n k (S m)
-  | kSeq _ k => do_break n k (S m)
-  | kLoop _ k =>
+Fixpoint do_break n E k : option (env * kont) :=
+  match k, E with
+  | kEndIf k, Frame _ E => do_break n E k
+  | kSeq _ k, Frame _ E => do_break n E k
+  | kLoop _ k, Frame _ E =>
     match n with
-    | 0 => ret (k, m)
-    | S n => do_break n k (S m)
+    | 0 => ret (E, k)
+    | S n => do_break n E k
     end
-  | kMt => None
+  | kMt, _ | _, Top _ => None
   end.
 
-Definition CESK : Type := s * env * store * kont.
+Definition CESK : Type := c * env * store * kont.
 Definition checkpoint : Type := env * kont * list (addr * val).
 
 Variant event :=
@@ -152,18 +186,23 @@ Variant event :=
 | eCheckpoint (chkp : checkpoint) (st : CESK).
 
 
+
 Definition next (st : CESK) : option event :=
   let '(s, E, St, k) := st in
   match s return option event with
   | Let e body =>
     v <- eval E St e ;;
-    ret (ePure (body, extend_frame E (List.length St), St ++ [v], k))
+    ret (ePure (body,
+                extend_frame E (st_next St),
+                store_add_next St v,
+                k))
   | LetInput body =>
-    ret (eInput (fun v => (body, extend_frame E (List.length St), St ++ [v], k)))
+    ret (eInput (fun v => (body, extend_frame E (st_next St),
+                           store_add_next St v, k)))
   | Assign l e =>
     v <- eval E St e ;;
     ptr <- eval_pexp E St l ;;
-    Some (ePure (Noop, E, update_rev_nth St ptr v, k))
+    Some (ePure (Noop, E, store_add St ptr v, k))
   | If e s1 s2 =>
     v <- eval E St e ;;
     match v with
@@ -172,9 +211,8 @@ Definition next (st : CESK) : option event :=
     end
   | Loop s => ret (ePure (s, Frame [] E, St, kLoop s k))
   | Break n =>
-    '(k', m) <- do_break n k 0 ;;
-    (* TODO: deallocate frames broken out of *)
-    ret (ePure (Noop, E, St, k'))
+    '(E', k') <- do_break n E k ;;
+    ret (ePure (Noop, E', St, k'))
   | Seq s1 s2 => ret (ePure (s1, Frame [] E, St, kSeq s2 k))
 
   | Noop =>
@@ -182,8 +220,7 @@ Definition next (st : CESK) : option event :=
     | kEndIf k', Frame _ E' => ret (ePure (Noop, E', St, k'))
     | kSeq s2 k', Frame _ E' => ret (ePure (s2, E', St, k'))
     | kLoop s' k', Frame _ E' => ret (ePure (s', Frame [] E', St, kLoop s' k'))
-    | kMt, _ => None
-    | _, Top _ => None
+    | kMt, _ | _, Top _ => None
     end
 
   | Output e =>
@@ -192,14 +229,15 @@ Definition next (st : CESK) : option event :=
 
   | Checkpoint ps =>
     ls <- mapT (eval_pexp E St) ps ;;
-    vs <- mapT (rev_nth_error St) ls ;;
+    vs <- mapT (lookup_store St) ls ;;
     ret (eCheckpoint (E, k, combine ls vs) (Noop, E, St, k))
   end.
 
 Definition do_reset (st : CESK) (p : checkpoint) : CESK :=
   let '(_, _, St, _) := st in
-  let '(E, k, vs) := p in
-  (Noop, E, St, k).
+  let '(E, k, chks) := p in
+  let St' := fold (fun '(a, v) St' => store_add St' a v) St chks in
+  (Noop, E, St', k).
 
 (* IO log, allows for nondeterminism w/ still reasoning about what inputs were seen/are the same *)
 
@@ -229,16 +267,17 @@ Inductive step : state -> state -> Prop :=
 | step_reset : forall c1 p io,
   step (c1, p, io) (do_reset c1 p, p, io_reset :: io).
 
-(*
-Inductive step : CESKP -> CESKP -> Prop :=
-| step_Seq1 : forall s1 s2 E St k p, step (Seq s1 s2, E, St, k, p) (s1, E, St, kSeq s2 E k, p)
-| step_Seq2 : forall s2 E E' St k p, step (Noop, E', St, kSeq s2 E k, p) (s2, E, St, k, p)
-
-| step_Loop1 : forall s E St k p, step (Loop s, E, St, k, p) (s, E, St, kLoop s E k, p)
-| step_Loop2 : forall s E E' St k p, step (Noop, E', St, kLoop s E k, p) (s, E, St, kLoop s E k, p)
-
-| step_Break0 : forall s E E' St k p, step (Break 0, E, St, kLoop s E' k, p) (Noop, E, St, k, p)
-| step_BreakS : forall n body E E' St k p,
-  step (Break (S n), E, St, kLoop body E k, p) (Break n, E', St, k, p)
-| step_BreakSeq : forall n E E' St s2 k p, step (Break n, E, St, kSeq s2 E' k, p) (Break n, E, St, k, p).
-*)
+Fixpoint filter_log l :=
+  match l with
+  | [] => []
+  | io_in v :: l' => io_in v :: filter_log l'
+  | io_out v :: l' => io_out v :: filter_log l'
+  | io_check :: l' => io_check :: filter_log l'
+  | io_reset :: l' => remove_reset l'
+  end
+with remove_reset l :=
+  match l with
+  | [] => []
+  | io_check :: l' => io_check :: filter_log l'
+  | _ :: l' => remove_reset l'
+  end.
