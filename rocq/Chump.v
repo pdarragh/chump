@@ -68,8 +68,7 @@ Definition lookup_env {A} (e : env A) (v : var) : option A :=
 Inductive val :=
 | vInt (i : Z)
 | vBool (b : bool)
-| vPtr (p : addr)
-| vNull.
+| vPtr (p : addr).
 
 Record store := mkStore { st_next : positive ; st_map : PositiveMap.t val }.
 
@@ -370,4 +369,139 @@ Inductive has_ty_c : env ty -> nat -> c -> Prop :=
 | has_ty_Checkpoint : forall G n ps ts,
   Forall2 (has_ty_pexp G) ps ts ->
   has_ty_c G n (Checkpoint ps).
+
+
+Definition store_ty := PositiveMap.t ty.
+
+Variant has_ty_val : store_ty -> val -> ty -> Prop :=
+| has_ty_vInt : forall ST i, has_ty_val ST (vInt i) tInt
+| has_ty_vBool : forall ST b, has_ty_val ST (vBool b) tBool
+| has_ty_vPtr : forall ST a t,
+  PositiveMap.find a ST = Some t ->
+  has_ty_val ST (vPtr a) (tPtr t).
+
+Definition has_ty_store St ST : Prop := forall a t,
+  PositiveMap.find a ST = Some t -> exists v, lookup_store St a = Some v /\ has_ty_val ST v t.
+
+
+Inductive has_ty_env (ST : store_ty) : env addr -> env ty -> Prop :=
+| has_ty_Top : forall ls ts,
+  Forall2 (fun a t => PositiveMap.find a ST = Some t) ls ts ->
+  has_ty_env ST (Top ls) (Top ts)
+| has_ty_Frame : forall ls ts E G,
+  Forall2 (fun a t => PositiveMap.find a ST = Some t) ls ts ->
+  has_ty_env ST E G ->
+  has_ty_env ST (Frame ls E) (Frame ts G).
+
+
+Lemma Forall2_nth_error_1 : forall {A B} P (l1 : list A) (l2 : list B),
+  Forall2 P l1 l2 ->
+  forall n x,
+  nth_error l1 n = Some x ->
+  exists y, nth_error l2 n = Some y /\ P x y.
+Proof.
+  intros A B P l1 l2 Hforall.
+  induction Hforall; intros n z Hnth.
+  - destruct n; discriminate.
+  - destruct n; cbn in *.
+    + exists y.
+      split; [reflexivity|].
+      injection Hnth as Heq.
+      rewrite <- Heq.
+      apply H.
+    + apply IHHforall, Hnth.
+Qed.
+
+Lemma Forall2_nth_error_2 : forall {A B} P (l1 : list A) (l2 : list B),
+  Forall2 P l1 l2 ->
+  forall n y,
+  nth_error l2 n = Some y ->
+  exists x, nth_error l1 n = Some x /\ P x y.
+Proof.
+  intros ? ? ? ? ? Hforall.
+  apply Forall2_nth_error_1, Forall2_flip, Hforall.
+Qed.
+
+Lemma well_typed_env_lookup : forall ST E G,
+  has_ty_env ST E G ->
+  forall x t,
+  lookup_env G x = Some t ->
+  exists a, lookup_env E x = Some a /\ PositiveMap.find a ST = Some t.
+Proof.
+  intros ST E G Henv x.
+  destruct x as [n m].
+  generalize dependent m.
+  generalize dependent n.
+  unfold lookup_env.
+  cbn.
+  induction Henv; intros n m t Hlookup.
+  - destruct n; [|discriminate Hlookup].
+    cbn in *.
+    apply (Forall2_nth_error_2 H) in Hlookup as [a [Hnth Hfind]].
+    eauto.
+  - destruct n; cbn in *.
+    + apply (Forall2_nth_error_2 H) in Hlookup as [a [Hnth Hfind]].
+      eauto.
+    + apply IHHenv, Hlookup.
+Qed.
+
+Lemma well_typed_eval_pexp : forall G ST t E St p,
+  has_ty_store St ST ->
+  has_ty_env ST E G ->
+  has_ty_pexp G p t ->
+  exists a, eval_pexp E St p = Some a /\ PositiveMap.find a ST = Some t.
+Proof.
+  intros G ST t E St p Hstore Henv.
+  generalize dependent t.
+  induction p; intros t Hty.
+  - inversion Hty; subst.
+    apply (well_typed_env_lookup Henv), H1.
+  - inversion Hty; subst.
+    apply IHp in H1.
+    destruct H1 as [a [Heval Hfind]].
+    apply Hstore in Hfind as [v [Hlookup Htyv]].
+    inversion Htyv; subst.
+    cbn.
+    rewrite Heval, Hlookup.
+    eexists; eauto.
+Qed.
+
+
+Lemma well_typed_eval : forall G ST t E St e,
+  has_ty_store St ST ->
+  has_ty_env ST E G ->
+  has_ty_exp G e t ->
+  exists v, eval E St e = Some v /\ has_ty_val ST v t.
+Proof.
+  intros G ST t E St e Hstore Henv.
+  generalize dependent t.
+  induction e; intros t Hty; inversion Hty; subst.
+  - cbn. eexists; split; eauto; constructor.
+  - cbn. eexists; split; eauto; constructor.
+  - apply (well_typed_eval_pexp Hstore Henv) in H1 as [a [Heval Hfind]].
+    cbn.
+    rewrite Heval.
+    eexists; split; eauto.
+    constructor.
+    assumption.
+  - apply (well_typed_eval_pexp Hstore Henv) in H1 as [a [Heval Hfind]].
+    apply Hstore in Hfind as [v [Hlookup Htyv]].
+    cbn.
+    rewrite Heval.
+    eexists; eauto.
+  - inversion H0; subst.
+    destruct o.
+    cbn.
+    apply IHe in H2 as [v [Heval Htyv]].
+    rewrite Heval.
+    inversion Htyv; subst.
+    eexists; split; eauto; constructor.
+  - cbn.
+    apply IHe1 in H5 as [v1 [Heval1 Htyv1]].
+    rewrite Heval1.
+    apply IHe2 in H6 as [v2 [Heval2 Htyv2]].
+    rewrite Heval2.
+    inversion H3; subst; inversion Htyv1; inversion Htyv2; subst; cbn;
+    eexists; split; eauto; constructor.
+Qed.
 
