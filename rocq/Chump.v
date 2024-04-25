@@ -230,10 +230,7 @@ Definition next (st : CESKP) : option event :=
     ret (eCheckpoint (Noop, E, St, k, (k, combine ls vs)))
   end.
 
-Definition do_reset (st : CESKP) : CESKP :=
-  let '(_, _, St, _, (k, chks)) := st in
-  let St' := fold (fun '(a, v) St' => store_add St' a v) St chks in
-  (Noop, [], St', k, (k, chks)).
+Definition do_reset := fold (fun '(a, v) St' => store_add St' a v).
 
 (* IO log, allows for nondeterminism w/ still reasoning about what inputs were seen/are the same *)
 
@@ -302,7 +299,13 @@ Inductive step : state -> state -> Prop :=
 | step_Checkpoint : forall ps E St k P io chks,
   Forall2 (fun p '(a, v) => eval_pexp E St p = Some a /\ lookup_store St a = Some v) ps chks ->
   step ((Checkpoint ps, E, St, k, P), io)
-       ((Noop, E, St, k, (k, chks)), io_reset :: io).
+       ((Noop, E, St, k, (k, chks)), io_check :: io)
+
+| step_Reset : forall c E St k' k chks io,
+  step ((c, E, St, k', (k, chks)), io)
+       ((Noop, [], do_reset St chks, k, (k, chks)), io_reset :: io).
+
+Global Hint Constructors step : core.
 
 Fixpoint filter_log l :=
   match l with
@@ -403,6 +406,8 @@ Inductive has_ty_c : env ty -> nat -> c -> Prop :=
   Forall2 (has_ty_pexp G) ps ts ->
   has_ty_c G n (Checkpoint ps).
 
+Global Hint Constructors has_ty_pexp has_ty_op1 has_ty_op2 has_ty_exp has_ty_c : core.
+
 
 
 Inductive has_ty_val (St : store) : val -> ty -> Prop :=
@@ -415,17 +420,28 @@ Inductive has_ty_val (St : store) : val -> ty -> Prop :=
 
 Definition has_ty_env (St : store) := Forall2 (fun a t => has_ty_val St (vPtr a) (tPtr t)).
 
-Inductive has_ty_kont : nat -> kont -> Prop :=
-| has_ty_kMt : has_ty_kont 0 kMt
+Inductive has_ty_kont (St : store) : nat -> kont -> Prop :=
+| has_ty_kMt : has_ty_kont St 0 kMt
 | has_ty_kSeq : forall G n c2 E k,
-  (forall St, has_ty_env St E G -> has_ty_c G n c2) ->
-  has_ty_kont n k ->
-  has_ty_kont n (kSeq c2 E k)
+  has_ty_env St E G ->
+  has_ty_c G n c2 ->
+  has_ty_kont St n k ->
+  has_ty_kont St n (kSeq c2 E k)
 | has_ty_kLoop : forall G n c E k,
-  (forall St, has_ty_env St E G -> has_ty_c G (S n) c) ->
-  has_ty_kont n (kLoop c E k).
+  has_ty_env St E G ->
+  has_ty_c G (S n) c ->
+  has_ty_kont St n k ->
+  has_ty_kont St (S n) (kLoop c E k).
 
+Inductive has_ty_CESKP : CESKP -> Prop :=
+| has_ty_ceskp : forall G n c E St k P,
+  store_wf St ->
+  has_ty_env St E G ->
+  has_ty_c G n c ->
+  has_ty_kont St n k ->
+  has_ty_CESKP (c, E, St, k, P).
 
+Global Hint Constructors has_ty_val has_ty_kont has_ty_CESKP : core.
 
 Lemma Forall2_nth_error_1 : forall {A B} P (l1 : list A) (l2 : list B),
   Forall2 P l1 l2 ->
@@ -490,42 +506,209 @@ Proof.
   - apply (well_typed_eval_pexp Henv) in H1 as [a [v [Heval [Hlookup Htyv]]]].
     cbn.
     rewrite Heval.
-    eexists; split; eauto.
-    econstructor; eassumption.
+    eauto.
   - apply (well_typed_eval_pexp Henv) in H1 as [a [v [Heval [Hlookup Htyv]]]].
     cbn.
     rewrite Heval.
-    eexists; eauto.
+    eauto.
   - inversion H0; subst.
     destruct o.
     cbn.
     apply IHe in H2 as [v [Heval Htyv]].
     rewrite Heval.
     inversion Htyv; subst.
-    eexists; split; eauto; constructor.
+    eauto.
   - cbn.
     apply IHe1 in H5 as [v1 [Heval1 Htyv1]].
     rewrite Heval1.
     apply IHe2 in H6 as [v2 [Heval2 Htyv2]].
     rewrite Heval2.
-    inversion H3; subst; inversion Htyv1; inversion Htyv2; subst; cbn;
-    eexists; split; eauto; constructor.
+    inversion H3; subst; inversion Htyv1; inversion Htyv2; subst; cbn; eauto.
 Qed.
 
-Inductive has_ty_CESKP : CESKP -> Prop :=
-| has_ty_ceskp : forall G n c E St k P,
-  has_ty_env St E G ->
-  has_ty_c G n c ->
-  has_ty_kont n k ->
-  has_ty_CESKP (c, E, St, k, P).
-
-Lemma preservation : forall st st' io io',
-  has_ty_CESKP st ->
-  step (st, io) (st', io') ->
-  has_ty_CESKP st'.
+Lemma well_typed_break : forall St n m k,
+  has_ty_kont St n k ->
+  m < n ->
+  exists o k', do_break m k = Some k' /\ has_ty_kont St o k'.
 Proof.
-  intros st st' io io' Hty Hstep.
-  destruct st as [[[[c E] St] k] P].
-  destruct st' as [[[[c' E'] St'] k'] P'].
-  inversion Hstep; subst; admit.
-Abort.
+  intros St n m k Hty.
+  generalize dependent m.
+  induction Hty; intros m Hlt.
+  - lia.
+  - apply IHHty in Hlt as [? [? [? ?]]].
+    eauto.
+  - destruct m; cbn.
+    + eauto.
+    + apply Nat.succ_lt_mono, IHHty in Hlt as [? [? [? ?]]].
+      eauto.
+Qed.
+
+Lemma exists_curry : forall {A B} (P : A -> B -> Prop),
+  (exists x y, P x y) <-> (exists '(x, y), P x y).
+Proof.
+  intros.
+  split.
+  - intros [x [y H]].
+    exists (x, y).
+    apply H.
+  - intros [[x y] H].
+    exists x, y.
+    apply H.
+Qed.
+
+Lemma Forall2_impl_exists : forall {X Y Z} (P : X -> Y -> Prop) (Q : X -> Z -> Prop) xs ys,
+  (forall x y, P x y -> exists z, Q x z) ->
+  Forall2 (fun x y => P x y) xs ys ->
+  exists zs, Forall2 (fun x z => Q x z) xs zs.
+Proof.
+  intros X Y Z P Q xs ys H HForall2.
+  induction HForall2.
+  - exists []. auto.
+  - apply H in H0 as [z HQ].
+    destruct IHHForall2 as [zs IHHForall2].
+    exists (z :: zs).
+    auto.
+Qed.
+
+Variant is_halted : CESKP -> Prop :=
+| halted : forall E St P, is_halted (Noop, E, St, kMt, P).
+
+Lemma progress : forall st1 io1,
+  has_ty_CESKP st1 ->
+  is_halted st1 \/ exists st2 io2, step (st1, io1) (st2, io2).
+Proof.
+  intros st2 io1 Hty.
+  inversion Hty; subst.
+  inversion H1; subst.
+  - (* Noop *)
+    inversion H2; subst.
+    + (* kMt *)
+      left. constructor.
+    + (* kSeq *)
+      right. eauto.
+    + (* kLoop *)
+      right. eauto.
+
+  - (* Let *)
+    right.
+    apply (well_typed_eval H0) in H3 as [? [? ?]].
+    eexists. eexists.
+    econstructor; eauto.
+
+  - (* LetInput *)
+    right.
+    eexists. exists (io_in 0 :: io1).
+    econstructor; eauto.
+
+  - (* Assign *)
+    right.
+    apply (well_typed_eval H0) in H4 as [? [? ?]].
+    apply (well_typed_eval_pexp H0) in H3 as [? [? [? [? ?]]]].
+    eexists. eexists.
+    econstructor; eauto.
+
+  - (* If *)
+    right.
+    apply (well_typed_eval H0) in H3 as [? [? ?]].
+    inversion H6; subst.
+    destruct b; eexists; eexists; eauto.
+
+  - (* Loop *)
+    right.
+    eexists. eexists.
+    econstructor; eauto.
+
+  - (* Break *)
+    right.
+    apply (well_typed_break H2) in H3 as [? [? [? ?]]].
+    eexists. eexists.
+    econstructor.
+    eassumption.
+
+  - (* Output *)
+    right.
+    apply (well_typed_eval H0) in H3 as [? [? ?]].
+    inversion H4; subst.
+    eexists. eexists.
+    econstructor; eauto.
+
+  - (* Seq *)
+    right.
+    eexists. eexists. eauto.
+
+  - (* Checkpoint *)
+    right.
+    eapply Forall2_impl_exists in H3.
+    + destruct H3 as [? H3].
+      eexists. eexists.
+      econstructor.
+      apply H3.
+    + intros x y Htyp.
+      apply exists_curry.
+      apply (well_typed_eval_pexp H0) in Htyp as [? [? [? [? ?]]]].
+      eauto.
+Qed.
+
+Lemma preservation : forall st1 st2 io1 io2,
+  has_ty_CESKP st1 ->
+  step (st1, io1) (st2, io2) ->
+  has_ty_CESKP st2.
+Proof.
+  intros st1 st2 io1 io2 Hty Hstep.
+  destruct st1 as [[[[c1 E1] St1] k1] P1].
+  destruct st2 as [[[[c2 E2] St2] k2] P2].
+  inversion Hstep; subst; inversion Hty; subst.
+  - (* step_Let *)
+    inversion H7; subst.
+    econstructor; eauto using store_wf_add_next_wf.
+    + admit. (* has_ty_env store_add_next *)
+    + admit. (* has_ty_kont store_add_next *)
+  - (* step_LetInput *)
+    inversion H6; subst.
+    econstructor; eauto using store_wf_add_next_wf.
+    + admit. (* has_ty_env store_add_next *)
+    + admit. (* has_ty_kont store_add_next *)
+  - (* step_Assign *)
+    inversion H7; subst.
+    apply (well_typed_eval_pexp H6) in H5 as [a2 [? [? [? ?]]]].
+    apply (well_typed_eval H6) in H9 as [? [? ?]].
+    rewrite H in H12.
+    injection H12 as H12.
+    subst.
+    econstructor; eauto.
+    + admit. (* store_wf store_add *)
+    + admit. (* has_ty_env store_add *)
+    + admit. (* has_ty_kont store_add *)
+  - (* step_If_true *)
+    inversion H7; subst.
+    eauto.
+  - (* step_If_false *)
+    inversion H7; subst.
+    eauto.
+  - (* step_Loop *)
+    inversion H6; subst.
+    eauto.
+  - (* step_kLoop *)
+    inversion H7; subst.
+    eauto.
+  - (* step_Break *)
+    inversion H7; subst.
+    apply (well_typed_break H8) in H3 as [? [? [? ?]]].
+    rewrite H in H0.
+    injection H0 as H0.
+    subst.
+    eauto.
+  - (* step_Output *)
+    eauto.
+  - (* step_Seq *)
+    inversion H6; subst.
+    eauto.
+  - (* step_kSeq *)
+    inversion H7; subst.
+    eauto.
+  - (* step_Checkpoint *)
+    inversion H7; subst.
+    econstructor; eauto.
+  - (* step_Reset *)
+    admit.
+Admitted.
