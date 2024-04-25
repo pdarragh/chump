@@ -13,7 +13,7 @@ Open Scope monad_scope.
 
 Set Implicit Arguments.
 
-Definition var : Type := nat * nat.
+Definition var : Type := nat.
 
 Inductive pexp :=
 | Var (x : var)
@@ -43,6 +43,7 @@ Inductive c :=
 
 Definition addr := positive.
 
+(*
 Inductive env A :=
 | Top (f : list A)
 | Frame (f : list A) (rst : env A).
@@ -64,6 +65,10 @@ Definition lookup_env {A} (e : env A) (v : var) : option A :=
   let '(i, j) := v in
   f <- lookup_frame e i ;;
   nth_error f j.
+*)
+
+Definition env := list.
+Definition lookup_env := nth_error.
 
 Inductive val :=
 | vInt (i : Z)
@@ -107,14 +112,8 @@ Qed.
 
 Inductive kont :=
 | kMt
-| kEndIf (k : kont)
-| kSeq (s2 : c) (k : kont)
-| kLoop (body : c) (k : kont).
-
-(*
-Definition update_rev_nth {A} (l : list A) n v := rev (firstn n (rev l) ++ [v] ++ skipn (S n) (rev l)).
-Definition rev_nth_error {A} (l : list A) n := nth_error (rev l) n.
-*)
+| kSeq (s2 : c) (E : env addr) (k : kont)
+| kLoop (body : c) (E : env addr) (k : kont).
 
 Fixpoint eval_pexp E St p : option addr :=
   match p with
@@ -165,83 +164,76 @@ Fixpoint eval (E : env addr) (St : store) (e : exp) : option val :=
     eval_op2 o v1 v2
   end.
 
-Fixpoint do_break n E k : option (env addr * kont) :=
-  match k, E with
-  | kEndIf k, Frame _ E => do_break n E k
-  | kSeq _ k, Frame _ E => do_break n E k
-  | kLoop _ k, Frame _ E =>
+Fixpoint do_break n k : option kont :=
+  match k with
+  | kSeq _ _ k => do_break n k
+  | kLoop _ _ k =>
     match n with
-    | 0 => ret (E, k)
-    | S n => do_break n E k
+    | 0 => Some k
+    | S n => do_break n k
     end
-  | kMt, _ | _, Top _ => None
+  | kMt => None
   end.
 
-Definition CESK : Type := c * env addr * store * kont.
-Definition checkpoint : Type := env addr * kont * list (addr * val).
+Definition checkpoint : Type := kont * list (addr * val).
+Definition CESKP : Type := c * env addr * store * kont * checkpoint.
 
 Variant event :=
-| ePure (st : CESK)
-| eInput (f : Z -> CESK)
-| eOutput (o : Z) (st : CESK)
-| eCheckpoint (chkp : checkpoint) (st : CESK).
+| ePure (st : CESKP)
+| eInput (f : Z -> CESKP)
+| eOutput (o : Z) (st : CESKP)
+| eCheckpoint (st : CESKP).
 
 
 
-Definition next (st : CESK) : option event :=
-  let '(s, E, St, k) := st in
+Definition next (st : CESKP) : option event :=
+  let '(s, E, St, k, P) := st in
   match s return option event with
   | Let e body =>
     v <- eval E St e ;;
-    ret (ePure (body,
-                extend_frame E (st_next St),
-                store_add_next St v,
-                k))
+    ret (ePure (body, st_next St :: E, store_add_next St v, k, P))
   | LetInput body =>
-    ret (eInput (fun i => (body, extend_frame E (st_next St),
-                           store_add_next St (vInt i), k)))
+    ret (eInput (fun i => (body, st_next St :: E, store_add_next St (vInt i), k, P)))
   | Assign l e =>
     v <- eval E St e ;;
     ptr <- eval_pexp E St l ;;
-    Some (ePure (Noop, E, store_add St ptr v, k))
+    Some (ePure (Noop, E, store_add St ptr v, k, P))
   | If e s1 s2 =>
     v <- eval E St e ;;
     match v with
-    | vBool b => ret (ePure (if b then s1 else s2, E, St, kEndIf k))
+    | vBool b => ret (ePure (if b then s1 else s2, E, St, k, P))
     | _ => None
     end
-  | Loop s => ret (ePure (s, Frame [] E, St, kLoop s k))
+  | Loop s => ret (ePure (s, E, St, kLoop s E k, P))
   | Break n =>
-    '(E', k') <- do_break n E k ;;
-    ret (ePure (Noop, E', St, k'))
-  | Seq s1 s2 => ret (ePure (s1, Frame [] E, St, kSeq s2 k))
+    k' <- do_break n k ;;
+    ret (ePure (Noop, E, St, k', P))
+  | Seq s1 s2 => ret (ePure (s1, E, St, kSeq s2 E k, P))
 
   | Noop =>
-    match k, E with
-    | kEndIf k', Frame _ E' => ret (ePure (Noop, E', St, k'))
-    | kSeq s2 k', Frame _ E' => ret (ePure (s2, E', St, k'))
-    | kLoop s' k', Frame _ E' => ret (ePure (s', Frame [] E', St, kLoop s' k'))
-    | kMt, _ | _, Top _ => None
+    match k with
+    | kSeq s2 E' k' => ret (ePure (s2, E', St, k', P))
+    | kLoop s' E' k' => ret (ePure (s', E', St, kLoop s' E' k', P))
+    | kMt => None
     end
 
   | Output e =>
     v <- eval E St e ;;
     match v with
-    | vInt i => ret (eOutput i (Noop, E, St, k))
+    | vInt i => ret (eOutput i (Noop, E, St, k, P))
     | _ => None
     end
 
   | Checkpoint ps =>
     ls <- mapT (eval_pexp E St) ps ;;
     vs <- mapT (lookup_store St) ls ;;
-    ret (eCheckpoint (E, k, combine ls vs) (Noop, E, St, k))
+    ret (eCheckpoint (Noop, E, St, k, (k, combine ls vs)))
   end.
 
-Definition do_reset (st : CESK) (p : checkpoint) : CESK :=
-  let '(_, _, St, _) := st in
-  let '(E, k, chks) := p in
+Definition do_reset (st : CESKP) : CESKP :=
+  let '(_, _, St, _, (k, chks)) := st in
   let St' := fold (fun '(a, v) St' => store_add St' a v) St chks in
-  (Noop, E, St', k).
+  (Noop, [], St', k, (k, chks)).
 
 (* IO log, allows for nondeterminism w/ still reasoning about what inputs were seen/are the same *)
 
@@ -253,23 +245,64 @@ Variant io_event :=
 
 Definition io_log := list io_event.
 
-Definition state : Type := CESK * checkpoint * io_log.
+Definition state : Type := CESKP * io_log.
 
 Inductive step : state -> state -> Prop :=
-| step_pure : forall c1 c2 p io,
-  next c1 = Some (ePure c2) ->
-  step (c1, p, io) (c2, p, io)
-| step_input : forall c1 f i p io,
-  next c1 = Some (eInput f) ->
-  step (c1, p, io) (f i, p, io_in i :: io)
-| step_output : forall c1 c2 i p io,
-  next c1 = Some (eOutput i c2) ->
-  step (c1, p, io) (c2, p, io_out i :: io)
-| step_check : forall c1 c2 p p' io,
-  next c1 = Some (eCheckpoint p c2) ->
-  step (c1, p', io) (c2, p, io_check :: io)
-| step_reset : forall c1 p io,
-  step (c1, p, io) (do_reset c1 p, p, io_reset :: io).
+| step_Let : forall e c E St k P io v,
+  eval E St e = Some v ->
+  step ((Let e c, E, St, k, P), io)
+       ((c, st_next St :: E, store_add_next St v, k, P), io)
+
+| step_LetInput : forall c E St k P io i,
+  step ((LetInput c, E, St, k, P), io)
+       ((c, st_next St :: E, store_add_next St (vInt i), k, P), io_in i :: io)
+
+| step_Assign : forall p e E St k P io v a,
+  eval E St e = Some v ->
+  eval_pexp E St p = Some a ->
+  step ((Assign p e, E, St, k, P), io)
+       ((Noop, E, store_add St a v, k, P), io)
+
+| step_If_true : forall e c1 c2 E St k P io,
+  eval E St e = Some (vBool true) ->
+  step ((If e c1 c2, E, St, k, P), io)
+       ((c1, E, St, k, P), io)
+
+| step_If_false : forall e c1 c2 E St k P io,
+  eval E St e = Some (vBool false) ->
+  step ((If e c1 c2, E, St, k, P), io)
+       ((c2, E, St, k, P), io)
+
+| step_Loop : forall c E St k P io,
+  step ((Loop c, E, St, k, P), io)
+       ((c, E, St, kLoop c E k, P), io)
+
+| step_kLoop : forall E' St c E k P io,
+  step ((Noop, E', St, kLoop c E k, P), io)
+       ((c, E, St, kLoop c E k, P), io)
+
+| step_Break : forall n E St k P io k',
+  do_break n k = Some k' ->
+  step ((Break n, E, St, k, P), io)
+       ((Noop, E, St, k', P), io)
+
+| step_Output : forall e E St k P io i,
+  eval E St e = Some (vInt i) ->
+  step ((Output e, E, St, k, P), io)
+       ((Noop, E, St, k, P), io_out i :: io)
+
+| step_Seq : forall c1 c2 E St k P io,
+  step ((Seq c1 c2, E, St, k, P), io)
+       ((c1, E, St, kSeq c2 E k, P), io)
+
+| step_kSeq : forall E' St c2 E k P io,
+  step ((Noop, E', St, kSeq c2 E k, P), io)
+       ((c2, E, St, k, P), io)
+
+| step_Checkpoint : forall ps E St k P io chks,
+  Forall2 (fun p '(a, v) => eval_pexp E St p = Some a /\ lookup_store St a = Some v) ps chks ->
+  step ((Checkpoint ps, E, St, k, P), io)
+       ((Noop, E, St, k, (k, chks)), io_reset :: io).
 
 Fixpoint filter_log l :=
   match l with
@@ -333,10 +366,10 @@ Inductive has_ty_c : env ty -> nat -> c -> Prop :=
 | has_ty_Noop : forall G n, has_ty_c G n Noop
 | has_ty_Let : forall G n e t c,
   has_ty_exp G e t ->
-  has_ty_c (extend_frame G t) n c ->
+  has_ty_c (t :: G) n c ->
   has_ty_c G n (Let e c)
 | has_ty_LetInput : forall G n c,
-  has_ty_c (extend_frame G tInt) n c ->
+  has_ty_c (tInt :: G) n c ->
   has_ty_c G n (LetInput c)
 | has_ty_Assign : forall G n p e t,
   has_ty_pexp G p t ->
@@ -345,12 +378,12 @@ Inductive has_ty_c : env ty -> nat -> c -> Prop :=
 
 | has_ty_If : forall G n e c1 c2,
   has_ty_exp G e tBool ->
-  has_ty_c (Frame [] G) n c1 ->
-  has_ty_c (Frame [] G) n c2 ->
+  has_ty_c G n c1 ->
+  has_ty_c G n c2 ->
   has_ty_c G n (If e c1 c2)
 
 | has_ty_Loop : forall G n c,
-  has_ty_c (Frame [] G) (S n) c ->
+  has_ty_c G (S n) c ->
   has_ty_c G n (Loop c)
 
 | has_ty_Break : forall G n m,
@@ -362,7 +395,7 @@ Inductive has_ty_c : env ty -> nat -> c -> Prop :=
   has_ty_c G n (Output e)
 
 | has_ty_Seq : forall G n c1 c2,
-  has_ty_c (Frame [] G) n c1 ->
+  has_ty_c G n c1 ->
   has_ty_c G n c2 ->
   has_ty_c G n (Seq c1 c2)
 
@@ -371,27 +404,27 @@ Inductive has_ty_c : env ty -> nat -> c -> Prop :=
   has_ty_c G n (Checkpoint ps).
 
 
-Definition store_ty := PositiveMap.t ty.
 
-Variant has_ty_val : store_ty -> val -> ty -> Prop :=
-| has_ty_vInt : forall ST i, has_ty_val ST (vInt i) tInt
-| has_ty_vBool : forall ST b, has_ty_val ST (vBool b) tBool
-| has_ty_vPtr : forall ST a t,
-  PositiveMap.find a ST = Some t ->
-  has_ty_val ST (vPtr a) (tPtr t).
+Inductive has_ty_val (St : store) : val -> ty -> Prop :=
+| has_ty_vInt : forall i, has_ty_val St (vInt i) tInt
+| has_ty_vBool : forall b, has_ty_val St (vBool b) tBool
+| has_ty_vPtr : forall a v t,
+  lookup_store St a = Some v ->
+  has_ty_val St v t ->
+  has_ty_val St (vPtr a) (tPtr t).
 
-Definition has_ty_store St ST : Prop := forall a t,
-  PositiveMap.find a ST = Some t -> exists v, lookup_store St a = Some v /\ has_ty_val ST v t.
+Definition has_ty_env (St : store) := Forall2 (fun a t => has_ty_val St (vPtr a) (tPtr t)).
 
+Inductive has_ty_kont : nat -> kont -> Prop :=
+| has_ty_kMt : has_ty_kont 0 kMt
+| has_ty_kSeq : forall G n c2 E k,
+  (forall St, has_ty_env St E G -> has_ty_c G n c2) ->
+  has_ty_kont n k ->
+  has_ty_kont n (kSeq c2 E k)
+| has_ty_kLoop : forall G n c E k,
+  (forall St, has_ty_env St E G -> has_ty_c G (S n) c) ->
+  has_ty_kont n (kLoop c E k).
 
-Inductive has_ty_env (ST : store_ty) : env addr -> env ty -> Prop :=
-| has_ty_Top : forall ls ts,
-  Forall2 (fun a t => PositiveMap.find a ST = Some t) ls ts ->
-  has_ty_env ST (Top ls) (Top ts)
-| has_ty_Frame : forall ls ts E G,
-  Forall2 (fun a t => PositiveMap.find a ST = Some t) ls ts ->
-  has_ty_env ST E G ->
-  has_ty_env ST (Frame ls E) (Frame ts G).
 
 
 Lemma Forall2_nth_error_1 : forall {A B} P (l1 : list A) (l2 : list B),
@@ -422,70 +455,44 @@ Proof.
   apply Forall2_nth_error_1, Forall2_flip, Hforall.
 Qed.
 
-Lemma well_typed_env_lookup : forall ST E G,
-  has_ty_env ST E G ->
-  forall x t,
-  lookup_env G x = Some t ->
-  exists a, lookup_env E x = Some a /\ PositiveMap.find a ST = Some t.
-Proof.
-  intros ST E G Henv x.
-  destruct x as [n m].
-  generalize dependent m.
-  generalize dependent n.
-  unfold lookup_env.
-  cbn.
-  induction Henv; intros n m t Hlookup.
-  - destruct n; [|discriminate Hlookup].
-    cbn in *.
-    apply (Forall2_nth_error_2 H) in Hlookup as [a [Hnth Hfind]].
-    eauto.
-  - destruct n; cbn in *.
-    + apply (Forall2_nth_error_2 H) in Hlookup as [a [Hnth Hfind]].
-      eauto.
-    + apply IHHenv, Hlookup.
-Qed.
 
-Lemma well_typed_eval_pexp : forall G ST t E St p,
-  has_ty_store St ST ->
-  has_ty_env ST E G ->
+
+Lemma well_typed_eval_pexp : forall G t E St p,
+  has_ty_env St E G ->
   has_ty_pexp G p t ->
-  exists a, eval_pexp E St p = Some a /\ PositiveMap.find a ST = Some t.
+  exists a v, eval_pexp E St p = Some a /\ lookup_store St a = Some v /\ has_ty_val St v t.
 Proof.
-  intros G ST t E St p Hstore Henv.
+  intros G t E St p Henv.
   generalize dependent t.
-  induction p; intros t Hty.
-  - inversion Hty; subst.
-    apply (well_typed_env_lookup Henv), H1.
-  - inversion Hty; subst.
-    apply IHp in H1.
-    destruct H1 as [a [Heval Hfind]].
-    apply Hstore in Hfind as [v [Hlookup Htyv]].
+  induction p; intros t Hty; inversion Hty; subst.
+  - cbn.
+    unfold has_ty_env in Henv.
+    apply (Forall2_nth_error_2 Henv) in H1 as [a [Hnth Htyv]].
     inversion Htyv; subst.
-    cbn.
+    eauto.
+  - cbn.
+    apply IHp in H1 as [a [v [Heval [Hlookup Htyv]]]].
     rewrite Heval, Hlookup.
-    eexists; eauto.
+    inversion Htyv; subst.
+    eauto.
 Qed.
 
-
-Lemma well_typed_eval : forall G ST t E St e,
-  has_ty_store St ST ->
-  has_ty_env ST E G ->
+Lemma well_typed_eval : forall G t E St e,
+  has_ty_env St E G ->
   has_ty_exp G e t ->
-  exists v, eval E St e = Some v /\ has_ty_val ST v t.
+  exists v, eval E St e = Some v /\ has_ty_val St v t.
 Proof.
-  intros G ST t E St e Hstore Henv.
+  intros G t E St e Henv.
   generalize dependent t.
   induction e; intros t Hty; inversion Hty; subst.
   - cbn. eexists; split; eauto; constructor.
   - cbn. eexists; split; eauto; constructor.
-  - apply (well_typed_eval_pexp Hstore Henv) in H1 as [a [Heval Hfind]].
+  - apply (well_typed_eval_pexp Henv) in H1 as [a [v [Heval [Hlookup Htyv]]]].
     cbn.
     rewrite Heval.
     eexists; split; eauto.
-    constructor.
-    assumption.
-  - apply (well_typed_eval_pexp Hstore Henv) in H1 as [a [Heval Hfind]].
-    apply Hstore in Hfind as [v [Hlookup Htyv]].
+    econstructor; eassumption.
+  - apply (well_typed_eval_pexp Henv) in H1 as [a [v [Heval [Hlookup Htyv]]]].
     cbn.
     rewrite Heval.
     eexists; eauto.
@@ -505,3 +512,20 @@ Proof.
     eexists; split; eauto; constructor.
 Qed.
 
+Inductive has_ty_CESKP : CESKP -> Prop :=
+| has_ty_ceskp : forall G n c E St k P,
+  has_ty_env St E G ->
+  has_ty_c G n c ->
+  has_ty_kont n k ->
+  has_ty_CESKP (c, E, St, k, P).
+
+Lemma preservation : forall st st' io io',
+  has_ty_CESKP st ->
+  step (st, io) (st', io') ->
+  has_ty_CESKP st'.
+Proof.
+  intros st st' io io' Hty Hstep.
+  destruct st as [[[[c E] St] k] P].
+  destruct st' as [[[[c' E'] St'] k'] P'].
+  inversion Hstep; subst; admit.
+Abort.
