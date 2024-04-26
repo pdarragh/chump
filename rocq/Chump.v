@@ -75,23 +75,30 @@ Inductive val :=
 | vBool (b : bool)
 | vPtr (p : addr).
 
-Record store := mkStore { st_next : positive ; st_map : PositiveMap.t val }.
+Record store A := mkStore { st_next : positive ; st_map : PositiveMap.t A }.
 
-Definition lookup_store (s : store) (a : addr) :=
+Definition lookup_store {A} (s : store A) (a : addr) :=
   PositiveMap.find a (st_map s).
 
-Definition store_add (s : store) (a : addr) (v : val) :=
+Definition store_add {A} (s : store A) (a : addr) (v : A) :=
   mkStore (st_next s) (PositiveMap.add a v (st_map s)).
 
+Definition store_alloc {A} (s : store A) :=
+  mkStore (Pos.succ (st_next s)) (st_map s).
+
+
+Notation store_add_next s := (store_add (store_alloc s) (st_next s)) (only parsing).
+(*
 Definition store_add_next (s : store) (v : val) :=
-  mkStore (Pos.succ (st_next s)) (PositiveMap.add (st_next s) v (st_map s)).
+  store_add (store_alloc s) (st_next s) v.
+*)
 
-Definition init_store := mkStore xH (PositiveMap.empty val).
+Definition init_store {A} := mkStore xH (PositiveMap.empty A).
 
-Definition store_wf (s : store) :=
+Definition store_wf {A} (s : store A) :=
   forall a, (st_next s <= a)%positive -> PositiveMap.find a (st_map s) = None.
 
-Lemma init_store_wf : store_wf init_store.
+Lemma init_store_wf : forall {A}, @store_wf A init_store.
 Proof.
   unfold store_wf, init_store.
   cbn.
@@ -99,16 +106,112 @@ Proof.
   apply PositiveMap.gempty.
 Qed.
 
-Lemma store_wf_add_next_wf : forall s v, store_wf s -> store_wf (store_add_next s v).
+Lemma store_wf_alloc_wf : forall {A} (s : store A), store_wf s -> store_wf (store_alloc s).
 Proof.
-  unfold store_wf, store_add_next.
+  unfold store_wf, store_alloc.
   cbn.
-  intros s v H a Hle.
-  rewrite PositiveMapAdditionalFacts.gsspec.
-  destruct (PositiveMap.E.eq_dec a (st_next s)).
-  - lia.
-  - apply H. lia.
+  intros A s Hwf a Hle.
+  apply Hwf.
+  lia.
 Qed.
+
+Lemma store_wf_add_wf : forall {A} (s : store A) a v,
+  store_wf s -> (a < st_next s)%positive -> store_wf (store_add s a v).
+Proof.
+  unfold store_wf, store_add.
+  cbn.
+  intros A s a v Hwf Hlt a' Hle.
+  rewrite PositiveMapAdditionalFacts.gsspec.
+  destruct (PositiveMap.E.eq_dec a' a).
+  - lia.
+  - apply Hwf, Hle.
+Qed.
+
+Lemma store_wf_add_next_wf : forall {A} (s : store A) v, store_wf s -> store_wf (store_add_next s v).
+Proof.
+  unfold store_alloc.
+  intros.
+  apply store_wf_add_wf.
+  - apply store_wf_alloc_wf, H.
+  - apply Pos.lt_succ_diag_r.
+Qed.
+
+Lemma store_wf_lookup_lt : forall {A} (s : store A) a v,
+  store_wf s -> lookup_store s a = Some v -> (a < st_next s)%positive.
+Proof.
+  unfold store_wf, lookup_store.
+  intros A s a v Hwf Hfind.
+  destruct (st_next s <=? a)%positive eqn:E.
+  - apply Pos.leb_le, Hwf in E.
+    rewrite E in Hfind.
+    discriminate.
+  - apply Pos.leb_gt, E.
+Qed.
+
+Lemma lookup_store_alloc : forall A (s : store A) a,
+  lookup_store (store_alloc s) a = lookup_store s a.
+Proof. auto. Qed.
+
+Lemma lookup_store_add_neq : forall A (s : store A) a a' v',
+  a <> a' ->
+  lookup_store (store_add s a' v') a = lookup_store s a.
+Proof.
+  unfold lookup_store, store_add.
+  cbn.
+  intros A s a a' v' Hneq.
+  rewrite PositiveMapAdditionalFacts.gsspec.
+  destruct (PositiveMap.E.eq_dec a a').
+  - contradiction.
+  - reflexivity.
+Qed.
+
+Lemma lookup_store_add_eq : forall A (s : store A) a v,
+  lookup_store (store_add s a v) a = Some v.
+Proof.
+  unfold lookup_store, store_add.
+  cbn.
+  intros.
+  rewrite PositiveMapAdditionalFacts.gsspec.
+  destruct (PositiveMap.E.eq_dec a a).
+  - reflexivity.
+  - contradiction.
+Qed.
+
+Lemma lookup_store_next_neq : forall {A} (s : store A) a v,
+  store_wf s ->
+  lookup_store s a = Some v ->
+  a <> st_next s.
+Proof.
+  unfold store_wf, lookup_store.
+  intros A s a v Hwf Hfind.
+  specialize Hwf with a.
+  destruct (Pos.eq_dec a (st_next s)).
+  - rewrite e in Hwf, Hfind.
+    specialize (Hwf (Pos.le_refl _)).
+    rewrite Hwf in Hfind.
+    discriminate.
+  - assumption.
+Qed.
+
+Lemma lookup_store_add_next : forall {A} (s : store A) a v v',
+  store_wf s ->
+  lookup_store s a = Some v ->
+  lookup_store (store_add_next s v') a = Some v.
+Proof.
+  intros.
+  rewrite lookup_store_add_neq.
+  - rewrite lookup_store_alloc.
+    assumption.
+  - eapply lookup_store_next_neq; eassumption.
+Qed.
+
+Global Hint Rewrite lookup_store_alloc lookup_store_add_neq lookup_store_add_eq : core.
+Global Hint Resolve
+  store_wf_alloc_wf store_wf_add_next_wf store_wf_add_wf store_wf_lookup_lt
+  lookup_store_add_eq lookup_store_next_neq lookup_store_add_next : core.
+Global Hint Immediate lookup_store_add_eq : core.
+
+
 
 Inductive kont :=
 | kMt
@@ -145,7 +248,7 @@ Definition eval_op2 o v1 v2 : option val :=
   | _, _, _ => None
   end.
 
-Fixpoint eval (E : env addr) (St : store) (e : exp) : option val :=
+Fixpoint eval (E : env addr) (St : store val) (e : exp) : option val :=
   match e with
   | Int i => ret (vInt i)
   | Bool b => ret (vBool b)
@@ -176,7 +279,7 @@ Fixpoint do_break n k : option kont :=
   end.
 
 Definition checkpoint : Type := kont * list (addr * val).
-Definition CESKP : Type := c * env addr * store * kont * checkpoint.
+Definition CESKP : Type := c * env addr * store val * kont * checkpoint.
 
 Variant event :=
 | ePure (st : CESKP)
@@ -230,7 +333,8 @@ Definition next (st : CESKP) : option event :=
     ret (eCheckpoint (Noop, E, St, k, (k, combine ls vs)))
   end.
 
-Definition do_reset := fold (fun '(a, v) St' => store_add St' a v).
+Definition do_reset : store val -> list (addr * val) -> store val :=
+  fold (fun '(a, v) St' => store_add St' a v).
 
 (* IO log, allows for nondeterminism w/ still reasoning about what inputs were seen/are the same *)
 
@@ -410,45 +514,104 @@ Global Hint Constructors has_ty_pexp has_ty_op1 has_ty_op2 has_ty_exp has_ty_c :
 
 
 
-Inductive has_ty_val (St : store) : val -> ty -> Prop :=
-| has_ty_vInt : forall i, has_ty_val St (vInt i) tInt
-| has_ty_vBool : forall b, has_ty_val St (vBool b) tBool
-| has_ty_vPtr : forall a v t,
-  lookup_store St a = Some v ->
-  has_ty_val St v t ->
-  has_ty_val St (vPtr a) (tPtr t).
+Variant has_ty_val (ST : store ty) : val -> ty -> Prop :=
+| has_ty_vInt : forall i, has_ty_val ST (vInt i) tInt
+| has_ty_vBool : forall b, has_ty_val ST (vBool b) tBool
+| has_ty_vPtr : forall a t,
+  lookup_store ST a = Some t ->
+  has_ty_val ST (vPtr a) (tPtr t).
 
-Definition has_ty_env (St : store) := Forall2 (fun a t => has_ty_val St (vPtr a) (tPtr t)).
+Definition has_ty_env (ST : store ty) := Forall2 (fun a t => has_ty_val ST (vPtr a) (tPtr t)).
 
-Inductive has_ty_kont (St : store) : nat -> kont -> Prop :=
-| has_ty_kMt : has_ty_kont St 0 kMt
+Definition has_ty_store St ST := forall a t,
+  lookup_store ST a = Some t -> exists v, lookup_store St a = Some v /\ has_ty_val ST v t.
+
+Inductive has_ty_kont (ST : store ty) : nat -> kont -> Prop :=
+| has_ty_kMt : has_ty_kont ST 0 kMt
 | has_ty_kSeq : forall G n c2 E k,
-  has_ty_env St E G ->
+  has_ty_env ST E G ->
   has_ty_c G n c2 ->
-  has_ty_kont St n k ->
-  has_ty_kont St n (kSeq c2 E k)
+  has_ty_kont ST n k ->
+  has_ty_kont ST n (kSeq c2 E k)
 | has_ty_kLoop : forall G n c E k,
-  has_ty_env St E G ->
+  has_ty_env ST E G ->
   has_ty_c G (S n) c ->
-  has_ty_kont St n k ->
-  has_ty_kont St (S n) (kLoop c E k).
+  has_ty_kont ST n k ->
+  has_ty_kont ST (S n) (kLoop c E k).
 
-Inductive has_ty_checkpoint (St : store) : checkpoint -> Prop :=
+Inductive has_ty_checkpoint (ST : store ty) : checkpoint -> Prop :=
 | has_ty_P : forall n k chks ts,
-  Forall2 (fun '(a, v) t => has_ty_val St (vPtr a) (tPtr t) /\ has_ty_val St v t) chks ts ->
-  has_ty_kont St n k ->
-  has_ty_checkpoint St (k, chks).
+  Forall2 (fun '(a, v) t => has_ty_val ST (vPtr a) (tPtr t) /\ has_ty_val ST v t) chks ts ->
+  has_ty_kont ST n k ->
+  has_ty_checkpoint ST (k, chks).
 
 Inductive has_ty_CESKP : CESKP -> Prop :=
-| has_ty_ceskp : forall G n c E St k P,
+| has_ty_ceskp : forall G n ST c E St k P,
   store_wf St ->
-  has_ty_env St E G ->
   has_ty_c G n c ->
-  has_ty_kont St n k ->
-  has_ty_checkpoint St P ->
+  has_ty_env ST E G ->
+  has_ty_store St ST ->
+  has_ty_kont ST n k ->
+  has_ty_checkpoint ST P ->
   has_ty_CESKP (c, E, St, k, P).
 
+Global Hint Unfold has_ty_env has_ty_store : core.
 Global Hint Constructors has_ty_val has_ty_kont has_ty_CESKP : core.
+
+Lemma has_ty_val_store_add_next : forall ST v t t',
+  store_wf ST ->
+  has_ty_val ST v t ->
+  has_ty_val (store_add_next ST t') v t.
+Proof.
+  intros ST v t t' Hwf Htyv.
+  inversion Htyv; eauto.
+Qed.
+
+Lemma has_ty_env_store_add_next : forall ST t E G,
+  store_wf ST ->
+  has_ty_env ST E G ->
+  has_ty_env (store_add_next ST t) E G.
+Proof.
+  unfold has_ty_env.
+  intros s v E G Hwf Henv.
+  eapply Forall2_impl; [|apply Henv].
+  cbn.
+  intros a t Htyv.
+  inversion Htyv; subst.
+  econstructor; eauto.
+Qed.
+
+(*
+Lemma has_ty_env_store_add : forall s a v t E G,
+  has_ty_val s (vPtr a) (tPtr t) ->
+  has_ty_val s v t ->
+  has_ty_env s E G ->
+  has_ty_env (store_add s a v) E G.
+Proof.
+  unfold has_ty_env.
+  intros s a v t E G Hptr Hv Henv.
+  eapply Forall2_impl; [|apply Henv].
+  cbn.
+  intros a' t' Hptr'.
+  inversion Hptr'; subst.
+  destruct (Pos.eq_dec a a').
+  - subst.
+    econstructor; eauto.
+*)
+
+Lemma has_ty_env_add_var : forall s a t E G,
+  has_ty_val s (vPtr a) (tPtr t) ->
+  has_ty_env s E G ->
+  has_ty_env s (a :: E) (t :: G).
+Proof.
+  intros.
+  constructor; auto.
+Qed.
+
+Global Hint Resolve
+  has_ty_val_store_add_next
+  has_ty_env_store_add_next
+  has_ty_env_add_var : core.
 
 Lemma Forall2_nth_error_1 : forall {A B} P (l1 : list A) (l2 : list B),
   Forall2 P l1 l2 ->
@@ -480,12 +643,13 @@ Qed.
 
 
 
-Lemma well_typed_eval_pexp : forall G t E St p,
-  has_ty_env St E G ->
+Lemma well_typed_eval_pexp : forall G ST t E St p,
+  has_ty_store St ST ->
+  has_ty_env ST E G ->
   has_ty_pexp G p t ->
-  exists a v, eval_pexp E St p = Some a /\ lookup_store St a = Some v /\ has_ty_val St v t.
+  exists a, eval_pexp E St p = Some a /\ lookup_store ST a = Some t.
 Proof.
-  intros G t E St p Henv.
+  intros G ST t E St p Hstore Henv.
   generalize dependent t.
   induction p; intros t Hty; inversion Hty; subst.
   - cbn.
@@ -494,28 +658,27 @@ Proof.
     inversion Htyv; subst.
     eauto.
   - cbn.
-    apply IHp in H1 as [a [v [Heval [Hlookup Htyv]]]].
+    apply IHp in H1 as [a [Heval Hlookup]].
+    apply Hstore in Hlookup as [? [Hlookup Htyv]].
     rewrite Heval, Hlookup.
     inversion Htyv; subst.
     eauto.
 Qed.
 
-Lemma well_typed_eval : forall G t E St e,
-  has_ty_env St E G ->
+Lemma well_typed_eval : forall G ST t E St e,
+  has_ty_store St ST ->
+  has_ty_env ST E G ->
   has_ty_exp G e t ->
-  exists v, eval E St e = Some v /\ has_ty_val St v t.
+  exists v, eval E St e = Some v /\ has_ty_val ST v t.
 Proof.
-  intros G t E St e Henv.
+  intros G ST t E St e Hstore Henv.
   generalize dependent t.
-  induction e; intros t Hty; inversion Hty; subst.
-  - cbn. eexists; split; eauto; constructor.
-  - cbn. eexists; split; eauto; constructor.
-  - apply (well_typed_eval_pexp Henv) in H1 as [a [v [Heval [Hlookup Htyv]]]].
-    cbn.
+  induction e; intros t Hty; inversion Hty; subst; cbn; eauto.
+  - apply (well_typed_eval_pexp Hstore Henv) in H1 as [a [Heval Hlookup]].
     rewrite Heval.
     eauto.
-  - apply (well_typed_eval_pexp Henv) in H1 as [a [v [Heval [Hlookup Htyv]]]].
-    cbn.
+  - apply (well_typed_eval_pexp Hstore Henv) in H1 as [a [Heval Hlookup]].
+    apply Hstore in Hlookup as [? [Hlookup Htyv]].
     rewrite Heval.
     eauto.
   - inversion H0; subst.
@@ -586,9 +749,9 @@ Lemma progress : forall st1 io1,
 Proof.
   intros st2 io1 Hty.
   inversion Hty; subst.
-  inversion H1; subst.
+  inversion H0; subst.
   - (* Noop *)
-    inversion H2; subst.
+    inversion H3; subst.
     + (* kMt *)
       left. constructor.
     + (* kSeq *)
@@ -598,61 +761,61 @@ Proof.
 
   - (* Let *)
     right.
-    apply (well_typed_eval H0) in H4 as [? [? ?]].
+    apply (well_typed_eval H2 H1) in H5 as [? [? ?]].
     eexists. eexists.
     econstructor; eauto.
 
   - (* LetInput *)
     right.
     eexists. exists (io_in 0 :: io1).
-    econstructor; eauto.
+    eauto.
 
   - (* Assign *)
     right.
-    apply (well_typed_eval H0) in H5 as [? [? ?]].
-    apply (well_typed_eval_pexp H0) in H4 as [? [? [? [? ?]]]].
+    apply (well_typed_eval H2 H1) in H6 as [? [? ?]].
+    apply (well_typed_eval_pexp H2 H1) in H5 as [? [? ?]].
     eexists. eexists.
     econstructor; eauto.
 
   - (* If *)
     right.
-    apply (well_typed_eval H0) in H4 as [? [? ?]].
-    inversion H7; subst.
-    destruct b; eexists; eexists; eauto.
+    apply (well_typed_eval H2 H1) in H5 as [? [? ?]].
+    inversion H8; subst.
+    destruct b; eauto.
 
   - (* Loop *)
     right.
-    eexists. eexists.
-    econstructor; eauto.
+    eauto.
 
   - (* Break *)
     right.
-    apply (well_typed_break H2) in H4 as [? [? [? ?]]].
+    apply (well_typed_break H3) in H5 as [? [? [? ?]]].
     eexists. eexists.
     econstructor.
     eassumption.
 
   - (* Output *)
     right.
-    apply (well_typed_eval H0) in H4 as [? [? ?]].
-    inversion H5; subst.
+    apply (well_typed_eval H2 H1) in H5 as [? [? ?]].
+    inversion H6; subst.
     eexists. eexists.
     econstructor; eauto.
 
   - (* Seq *)
     right.
-    eexists. eexists. eauto.
+    eauto.
 
   - (* Checkpoint *)
     right.
-    eapply Forall2_impl_exists in H4.
-    + destruct H4 as [? H4].
+    eapply Forall2_impl_exists in H5.
+    + destruct H5 as [? H5].
       eexists. eexists.
       econstructor.
-      apply H4.
+      apply H5.
     + intros x y Htyp.
       apply exists_curry.
-      apply (well_typed_eval_pexp H0) in Htyp as [? [? [? [? ?]]]].
+      apply (well_typed_eval_pexp H2 H1) in Htyp as [? [? ?]].
+      apply H2 in H7 as [? [? ?]].
       eauto.
 Qed.
 
@@ -680,71 +843,74 @@ Proof.
   destruct st2 as [[[[c2 E2] St2] k2] P2].
   inversion Hstep; subst; inversion Hty; subst.
   - (* step_Let *)
-    inversion H7; subst.
-    econstructor; eauto using store_wf_add_next_wf.
+    inversion H6; subst.
+    apply (well_typed_eval H8 H7) in H4 as [? [? ?]].
+    rewrite H in H0.
+    injection H0; intros; subst.
+    eapply has_ty_ceskp with (ST := store_add_next ST t); eauto.
     + admit. (* has_ty_env store_add_next *)
+    + admit. (* has_ty_store store_add_next *)
     + admit. (* has_ty_kont store_add_next *)
     + admit. (* has_ty_checkpoint store_add_next *)
   - (* step_LetInput *)
-    inversion H6; subst.
-    econstructor; eauto using store_wf_add_next_wf.
+    inversion H5; subst.
+    eapply has_ty_ceskp with (ST := store_add_next ST tInt); eauto.
     + admit. (* has_ty_env store_add_next *)
+    + admit. (* has_ty_store store_add_next *)
     + admit. (* has_ty_kont store_add_next *)
     + admit. (* has_ty_checkpoint store_add_next *)
   - (* step_Assign *)
-    inversion H7; subst.
-    apply (well_typed_eval_pexp H6) in H4 as [a2 [? [? [? ?]]]].
-    apply (well_typed_eval H6) in H10 as [? [? ?]].
+    inversion H6; subst.
+    apply (well_typed_eval_pexp H8 H7) in H4 as [a2 [? ?]].
+    apply (well_typed_eval H8 H7) in H11 as [? [? ?]].
     rewrite H in H12.
     injection H12; intros; subst.
     econstructor; eauto.
     + admit. (* store_wf store_add *)
-    + admit. (* has_ty_env store_add *)
-    + admit. (* has_ty_kont store_add *)
-    + admit. (* has_ty_checkpoint store_add *)
+    + admit. (* has_ty_store store_add *)
   - (* step_If_true *)
-    inversion H7; subst.
-    eauto.
-  - (* step_If_false *)
-    inversion H7; subst.
-    eauto.
-  - (* step_Loop *)
     inversion H6; subst.
     eauto.
+  - (* step_If_false *)
+    inversion H6; subst.
+    eauto.
+  - (* step_Loop *)
+    inversion H5; subst.
+    eauto.
   - (* step_kLoop *)
-    inversion H7; subst.
+    inversion H8; subst.
     eauto.
   - (* step_Break *)
-    inversion H7; subst.
-    apply (well_typed_break H8) in H3 as [? [? [? ?]]].
+    inversion H6; subst.
+    apply (well_typed_break H9) in H3 as [? [? [? ?]]].
     rewrite H in H0.
     injection H0; intros; subst.
     eauto.
   - (* step_Output *)
     eauto.
   - (* step_Seq *)
-    inversion H6; subst.
+    inversion H5; subst.
     eauto.
   - (* step_kSeq *)
-    inversion H7; subst.
+    inversion H8; subst.
     eauto.
   - (* step_Checkpoint *)
-    inversion H7; subst.
+    inversion H6; subst.
     econstructor; eauto.
     econstructor; eauto.
     eapply Forall2_trans; [|apply Forall2_flip, H0|apply H3].
     intros [a v] p t [Heval Hlookup] Htyp.
-    apply (well_typed_eval_pexp H6) in Htyp as [a' [v' [? [? ?]]]].
+    apply (well_typed_eval_pexp H8 H7) in Htyp as [? [? ?]].
     rewrite H in Heval.
     injection Heval; intros; subst.
+    split; eauto.
+    apply H8 in H1 as [? [? ?]].
     rewrite H1 in Hlookup.
     injection Hlookup; intros; subst.
     eauto.
   - (* step_Reset *)
-    inversion H8; subst.
+    inversion H9; subst.
     econstructor; eauto.
     + admit. (* store_wf do_reset *)
-    + admit. (* has_ty_env do_reset *)
-    + admit. (* has_ty_kont do_reset *)
-    + admit. (* has_ty_checkpoint do_reset *)
+    + admit. (* has_ty_store do_reset *)
 Admitted.
