@@ -547,7 +547,9 @@ Inductive has_ty_checkpoint (ST : store ty) : checkpoint -> Prop :=
 
 Inductive has_ty_CESKP : CESKP -> Prop :=
 | has_ty_ceskp : forall G n ST c E St k P,
+  store_wf ST ->
   store_wf St ->
+  st_next ST = st_next St ->
   has_ty_c G n c ->
   has_ty_env ST E G ->
   has_ty_store St ST ->
@@ -581,24 +583,6 @@ Proof.
   econstructor; eauto.
 Qed.
 
-(*
-Lemma has_ty_env_store_add : forall s a v t E G,
-  has_ty_val s (vPtr a) (tPtr t) ->
-  has_ty_val s v t ->
-  has_ty_env s E G ->
-  has_ty_env (store_add s a v) E G.
-Proof.
-  unfold has_ty_env.
-  intros s a v t E G Hptr Hv Henv.
-  eapply Forall2_impl; [|apply Henv].
-  cbn.
-  intros a' t' Hptr'.
-  inversion Hptr'; subst.
-  destruct (Pos.eq_dec a a').
-  - subst.
-    econstructor; eauto.
-*)
-
 Lemma has_ty_env_add_var : forall s a t E G,
   has_ty_val s (vPtr a) (tPtr t) ->
   has_ty_env s E G ->
@@ -608,10 +592,60 @@ Proof.
   constructor; auto.
 Qed.
 
+Lemma has_ty_store_add : forall St ST a v t,
+  has_ty_store St ST ->
+  lookup_store ST a = Some t ->
+  has_ty_val ST v t ->
+  has_ty_store (store_add St a v) ST.
+Proof.
+  unfold has_ty_store.
+  intros St ST a v t Hwf Hlookup Htyv a' t' Hlookup'.
+  destruct (Pos.eq_dec a a').
+  - subst.
+    exists v.
+    split; auto.
+    rewrite Hlookup' in Hlookup.
+    injection Hlookup as Heq.
+    subst.
+    assumption.
+  - apply Hwf in Hlookup' as [v' [Hlookup' Htyv']].
+    exists v'.
+    rewrite lookup_store_add_neq; auto.
+Qed.
+
 Global Hint Resolve
+  has_ty_store_add
   has_ty_val_store_add_next
   has_ty_env_store_add_next
   has_ty_env_add_var : core.
+
+Lemma has_ty_store_add_next : forall St v ST t,
+  store_wf ST ->
+  st_next ST = st_next St ->
+  has_ty_store St ST ->
+  has_ty_val ST v t ->
+  has_ty_store (store_add_next St v) (store_add_next ST t).
+Proof.
+  unfold has_ty_store.
+  intros St v ST t Hwf Heq Hstore Htyv a t' Hlookup.
+  destruct (Pos.eq_dec a (st_next ST)).
+  - subst.
+    rewrite lookup_store_add_eq in Hlookup.
+    injection Hlookup as ?; subst.
+    exists v.
+    split; auto.
+    rewrite Heq.
+    apply lookup_store_add_eq.
+  - rewrite lookup_store_add_neq in Hlookup by assumption.
+    apply Hstore in Hlookup as [v' [? ?]].
+    exists v'.
+    split; auto.
+    rewrite lookup_store_add_neq by lia.
+    assumption.
+Qed.
+
+Global Hint Resolve
+  has_ty_store_add_next : core.
 
 Lemma Forall2_nth_error_1 : forall {A B} P (l1 : list A) (l2 : list B),
   Forall2 P l1 l2 ->
@@ -749,9 +783,9 @@ Lemma progress : forall st1 io1,
 Proof.
   intros st2 io1 Hty.
   inversion Hty; subst.
-  inversion H0; subst.
+  inversion H2; subst.
   - (* Noop *)
-    inversion H3; subst.
+    inversion H5; subst.
     + (* kMt *)
       left. constructor.
     + (* kSeq *)
@@ -761,7 +795,7 @@ Proof.
 
   - (* Let *)
     right.
-    apply (well_typed_eval H2 H1) in H5 as [? [? ?]].
+    apply (well_typed_eval H4 H3) in H7 as [? [? ?]].
     eexists. eexists.
     econstructor; eauto.
 
@@ -772,15 +806,15 @@ Proof.
 
   - (* Assign *)
     right.
-    apply (well_typed_eval H2 H1) in H6 as [? [? ?]].
-    apply (well_typed_eval_pexp H2 H1) in H5 as [? [? ?]].
+    apply (well_typed_eval H4 H3) in H8 as [? [? ?]].
+    apply (well_typed_eval_pexp H4 H3) in H7 as [? [? ?]].
     eexists. eexists.
     econstructor; eauto.
 
   - (* If *)
     right.
-    apply (well_typed_eval H2 H1) in H5 as [? [? ?]].
-    inversion H8; subst.
+    apply (well_typed_eval H4 H3) in H7 as [? [? ?]].
+    inversion H10; subst.
     destruct b; eauto.
 
   - (* Loop *)
@@ -789,15 +823,15 @@ Proof.
 
   - (* Break *)
     right.
-    apply (well_typed_break H3) in H5 as [? [? [? ?]]].
+    apply (well_typed_break H5) in H7 as [? [? [? ?]]].
     eexists. eexists.
     econstructor.
     eassumption.
 
   - (* Output *)
     right.
-    apply (well_typed_eval H2 H1) in H5 as [? [? ?]].
-    inversion H6; subst.
+    apply (well_typed_eval H4 H3) in H7 as [? [? ?]].
+    inversion H8; subst.
     eexists. eexists.
     econstructor; eauto.
 
@@ -807,15 +841,15 @@ Proof.
 
   - (* Checkpoint *)
     right.
-    eapply Forall2_impl_exists in H5.
-    + destruct H5 as [? H5].
+    eapply Forall2_impl_exists in H7.
+    + destruct H7 as [? H7].
       eexists. eexists.
       econstructor.
-      apply H5.
+      apply H7.
     + intros x y Htyp.
       apply exists_curry.
-      apply (well_typed_eval_pexp H2 H1) in Htyp as [? [? ?]].
-      apply H2 in H7 as [? [? ?]].
+      apply (well_typed_eval_pexp H4 H3) in Htyp as [? [? ?]].
+      apply H4 in H9 as [? [? ?]].
       eauto.
 Qed.
 
@@ -833,6 +867,17 @@ Proof.
   - constructor; eauto.
 Qed.
 
+Lemma reset_no_alloc : forall St chks,
+  st_next (do_reset St chks) = st_next St.
+Proof.
+  unfold do_reset.
+  intros St chks.
+  induction chks.
+  - reflexivity.
+  - destruct a.
+    apply IHchks.
+Qed.
+
 Lemma preservation : forall st1 st2 io1 io2,
   has_ty_CESKP st1 ->
   step (st1, io1) (st2, io2) ->
@@ -843,74 +888,82 @@ Proof.
   destruct st2 as [[[[c2 E2] St2] k2] P2].
   inversion Hstep; subst; inversion Hty; subst.
   - (* step_Let *)
-    inversion H6; subst.
-    apply (well_typed_eval H8 H7) in H4 as [? [? ?]].
+    inversion H8; subst.
+    apply (well_typed_eval H10 H9) in H4 as [? [? ?]].
     rewrite H in H0.
-    injection H0; intros; subst.
+    injection H0 as ?; subst.
     eapply has_ty_ceskp with (ST := store_add_next ST t); eauto.
-    + admit. (* has_ty_env store_add_next *)
-    + admit. (* has_ty_store store_add_next *)
+    + cbn. f_equal. assumption.
+    + apply has_ty_env_add_var; eauto.
+      rewrite <- H7.
+      eauto.
     + admit. (* has_ty_kont store_add_next *)
     + admit. (* has_ty_checkpoint store_add_next *)
   - (* step_LetInput *)
-    inversion H5; subst.
+    inversion H7; subst.
     eapply has_ty_ceskp with (ST := store_add_next ST tInt); eauto.
-    + admit. (* has_ty_env store_add_next *)
-    + admit. (* has_ty_store store_add_next *)
+    + cbn. f_equal. assumption.
+    + apply has_ty_env_add_var; eauto.
+      rewrite <- H6.
+      eauto.
     + admit. (* has_ty_kont store_add_next *)
     + admit. (* has_ty_checkpoint store_add_next *)
   - (* step_Assign *)
-    inversion H6; subst.
-    apply (well_typed_eval_pexp H8 H7) in H4 as [a2 [? ?]].
-    apply (well_typed_eval H8 H7) in H11 as [? [? ?]].
+    inversion H8; subst.
+    apply (well_typed_eval_pexp H10 H9) in H4 as [a2 [? ?]].
     rewrite H in H12.
-    injection H12; intros; subst.
-    econstructor; eauto.
-    + admit. (* store_wf store_add *)
-    + admit. (* has_ty_store store_add *)
+    injection H12 as ?; subst.
+    apply (well_typed_eval H10 H9) in H14 as [? [? ?]].
+    rewrite H2 in H1.
+    injection H1 as ?; subst.
+    apply H10 in H0 as H4.
+    destruct H4 as [? [? ?]].
+    eauto.
   - (* step_If_true *)
-    inversion H6; subst.
-    eauto.
-  - (* step_If_false *)
-    inversion H6; subst.
-    eauto.
-  - (* step_Loop *)
-    inversion H5; subst.
-    eauto.
-  - (* step_kLoop *)
     inversion H8; subst.
     eauto.
+  - (* step_If_false *)
+    inversion H8; subst.
+    eauto.
+  - (* step_Loop *)
+    inversion H7; subst.
+    eauto.
+  - (* step_kLoop *)
+    inversion H10; subst.
+    eauto.
   - (* step_Break *)
-    inversion H6; subst.
-    apply (well_typed_break H9) in H3 as [? [? [? ?]]].
+    inversion H8; subst.
+    apply (well_typed_break H11) in H3 as [? [? [? ?]]].
     rewrite H in H0.
-    injection H0; intros; subst.
+    injection H0 as ?; subst.
     eauto.
   - (* step_Output *)
     eauto.
   - (* step_Seq *)
-    inversion H5; subst.
+    inversion H7; subst.
     eauto.
   - (* step_kSeq *)
-    inversion H8; subst.
+    inversion H10; subst.
     eauto.
   - (* step_Checkpoint *)
-    inversion H6; subst.
+    inversion H8; subst.
     econstructor; eauto.
     econstructor; eauto.
     eapply Forall2_trans; [|apply Forall2_flip, H0|apply H3].
     intros [a v] p t [Heval Hlookup] Htyp.
-    apply (well_typed_eval_pexp H8 H7) in Htyp as [? [? ?]].
+    apply (well_typed_eval_pexp H10 H9) in Htyp as [? [? ?]].
     rewrite H in Heval.
     injection Heval; intros; subst.
     split; eauto.
-    apply H8 in H1 as [? [? ?]].
+    apply H10 in H1 as [? [? ?]].
     rewrite H1 in Hlookup.
     injection Hlookup; intros; subst.
     eauto.
   - (* step_Reset *)
-    inversion H9; subst.
+    inversion H11; subst.
     econstructor; eauto.
     + admit. (* store_wf do_reset *)
+    + rewrite reset_no_alloc.
+      assumption.
     + admit. (* has_ty_store do_reset *)
 Admitted.
