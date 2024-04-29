@@ -600,12 +600,23 @@ Proof.
       * apply has_ty_val_store_add; eauto.
 Qed.
 
+Lemma has_ty_kont_store_add_new : forall ST a t n k,
+  store_wf ST ->
+  lookup_store ST a = None ->
+  has_ty_kont ST n k ->
+  has_ty_kont (store_add ST a t) n k.
+Proof.
+  intros ST a t n k Hwf Hlookup Hkont.
+  induction Hkont; econstructor; eauto using has_ty_env_store_add_new.
+Qed.
+
 Global Hint Resolve
   has_ty_val_store_add
   has_ty_env_store_add_new
   has_ty_store_add
   has_ty_store_add_new
-  has_ty_env_add_var : core.
+  has_ty_env_add_var
+  has_ty_kont_store_add_new : core.
 
 Lemma Forall2_nth_error_1 : forall {A B} P (l1 : list A) (l2 : list B),
   Forall2 P l1 l2 ->
@@ -844,13 +855,11 @@ Proof.
     rewrite H9 in H3.
     injection H3 as ?; subst.
     eapply has_ty_ceskp with (ST := store_add ST (st_next St1) t); eauto.
-    + admit. (* has_ty_kont store_add st_next *)
-    + admit. (* has_ty_checkpoint store_add st_next *)
+    admit. (* has_ty_checkpoint store_add st_next *)
   - (* step_LetInput *)
     inversion H4; subst.
     eapply has_ty_ceskp with (ST := store_add ST (st_next St1) tInt); eauto.
-    + admit. (* has_ty_kont store_add st_next *)
-    + admit. (* has_ty_checkpoint store_add st_next *)
+    admit. (* has_ty_checkpoint store_add st_next *)
   - (* step_Assign *)
     inversion H4; subst.
     apply (well_typed_eval_pexp H6 H5) in H13 as [a2 [? ?]].
