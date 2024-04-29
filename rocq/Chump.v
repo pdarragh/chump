@@ -838,6 +838,22 @@ Proof.
   - constructor; eauto.
 Qed.
 
+
+Lemma has_ty_checkpoint_add_new : forall St ST a t P,
+  has_ty_store St ST ->
+  lookup_store ST a = None ->
+  has_ty_checkpoint ST P ->
+  has_ty_checkpoint (store_add ST a t) P.
+Proof.
+  intros St ST a t P Hstore Hlookup HP.
+  inversion Hstore.
+  inversion HP; subst.
+  econstructor; eauto.
+  eapply Forall2_impl; [|apply H3].
+  intros [a' v] t' [Hptr Hv].
+  eauto.
+Qed.
+
 Lemma preservation : forall st1 st2 io1 io2,
   has_ty_CESKP st1 ->
   step (st1, io1) (st2, io2) ->
@@ -855,11 +871,11 @@ Proof.
     rewrite H9 in H3.
     injection H3 as ?; subst.
     eapply has_ty_ceskp with (ST := store_add ST (st_next St1) t); eauto.
-    admit. (* has_ty_checkpoint store_add st_next *)
+    eapply has_ty_checkpoint_add_new; eauto.
   - (* step_LetInput *)
     inversion H4; subst.
     eapply has_ty_ceskp with (ST := store_add ST (st_next St1) tInt); eauto.
-    admit. (* has_ty_checkpoint store_add st_next *)
+    eapply has_ty_checkpoint_add_new; eauto.
   - (* step_Assign *)
     inversion H4; subst.
     apply (well_typed_eval_pexp H6 H5) in H13 as [a2 [? ?]].
@@ -913,6 +929,7 @@ Proof.
     assumption.
   - (* step_Reset *)
     inversion H8; subst.
+    econstructor; eauto.
     econstructor; eauto.
     admit. (* has_ty_store do_reset *)
 Admitted.
