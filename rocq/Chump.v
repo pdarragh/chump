@@ -43,30 +43,6 @@ Inductive c :=
 
 Definition addr := positive.
 
-(*
-Inductive env A :=
-| Top (f : list A)
-| Frame (f : list A) (rst : env A).
-
-Definition extend_frame {A} (fr : env A) v :=
-  match fr with
-  | Top l => Top (v :: l)
-  | Frame l E => Frame (v :: l) E
-  end.
-
-Fixpoint lookup_frame {A} (e : env A) n : option (list A) :=
-  match n, e with
-  | 0, Top f | 0, Frame f _ => Some f
-  | S n, Frame _ rst => lookup_frame rst n
-  | S _, Top _ => None
-  end.
-
-Definition lookup_env {A} (e : env A) (v : var) : option A :=
-  let '(i, j) := v in
-  f <- lookup_frame e i ;;
-  nth_error f j.
-*)
-
 Definition env := list.
 Definition lookup_env := nth_error.
 
@@ -83,16 +59,6 @@ Definition lookup_store {A} (s : store A) (a : addr) :=
 Definition store_add {A} (s : store A) (a : addr) (v : A) :=
   mkStore (Pos.max (st_next s) (Pos.succ a)) (PositiveMap.add a v (st_map s)).
 
-(*
-Definition store_alloc {A} (s : store A) :=
-  mkStore (Pos.succ (st_next s)) (st_map s).
-
-Notation store_add_next s := (store_add (store_alloc s) (st_next s)) (only parsing).
-
-Definition store_add_next (s : store) (v : val) :=
-  store_add (store_alloc s) (st_next s) v.
-*)
-
 Definition init_store {A} := mkStore xH (PositiveMap.empty A).
 
 Definition store_wf {A} (s : store A) :=
@@ -105,17 +71,6 @@ Proof.
   intros.
   apply PositiveMap.gempty.
 Qed.
-
-(*
-Lemma store_wf_alloc_wf : forall {A} (s : store A), store_wf s -> store_wf (store_alloc s).
-Proof.
-  unfold store_wf, store_alloc.
-  cbn.
-  intros A s Hwf a Hle.
-  apply Hwf.
-  lia.
-Qed.
-*)
 
 Lemma store_wf_add_wf : forall {A} (s : store A) a v,
   store_wf s -> store_wf (store_add s a v).
@@ -141,21 +96,6 @@ Proof.
     discriminate.
   - apply Pos.leb_gt, E.
 Qed.
-
-(*
-Lemma store_wf_add_next_wf : forall {A} (s : store A) v, store_wf s -> store_wf (store_add_next s v).
-Proof.
-  unfold store_alloc.
-  intros.
-  apply store_wf_add_wf.
-  - apply store_wf_alloc_wf, H.
-  - apply Pos.lt_succ_diag_r.
-Qed.
-
-Lemma lookup_store_alloc : forall A (s : store A) a,
-  lookup_store (store_alloc s) a = lookup_store s a.
-Proof. auto. Qed.
-*)
 
 Lemma lookup_store_add_neq : forall A (s : store A) a a' v',
   a <> a' ->
@@ -196,36 +136,6 @@ Proof.
   reflexivity.
 Qed.
 
-(*
-Lemma lookup_store_next_neq : forall {A} (s : store A) a v,
-  store_wf s ->
-  lookup_store s a = Some v ->
-  a <> st_next s.
-Proof.
-  unfold store_wf, lookup_store.
-  intros A s a v Hwf Hfind.
-  specialize Hwf with a.
-  destruct (Pos.eq_dec a (st_next s)).
-  - rewrite e in Hwf, Hfind.
-    specialize (Hwf (Pos.le_refl _)).
-    rewrite Hwf in Hfind.
-    discriminate.
-  - assumption.
-Qed.
-
-Lemma lookup_store_add_next : forall {A} (s : store A) a v v',
-  store_wf s ->
-  lookup_store s a = Some v ->
-  lookup_store (store_add_next s v') a = Some v.
-Proof.
-  intros.
-  rewrite lookup_store_add_neq.
-  - rewrite lookup_store_alloc.
-    assumption.
-  - eapply lookup_store_next_neq; eassumption.
-Qed.
-*)
-
 Corollary store_wf_next_None : forall A (s : store A),
   store_wf s ->
   lookup_store s (st_next s) = None.
@@ -237,11 +147,9 @@ Proof.
 Qed.
 
 Global Hint Rewrite
-  (*lookup_store_alloc*)
   lookup_store_add_neq lookup_store_add_eq store_add_idemp store_wf_next_None : core.
 Global Hint Resolve
-  (*store_wf_alloc_wf store_wf_add_next_wf*) store_wf_add_wf store_wf_lookup_lt
-  lookup_store_add_eq (*lookup_store_next_neq lookup_store_add_next*) store_wf_next_None : core.
+  store_wf_add_wf store_wf_lookup_lt lookup_store_add_eq store_wf_next_None : core.
 Global Hint Immediate lookup_store_add_eq store_wf_next_None : core.
 
 
@@ -598,17 +506,6 @@ Inductive has_ty_CESKP : CESKP -> Prop :=
 Global Hint Unfold has_ty_env : core.
 Global Hint Constructors has_ty_val has_ty_store has_ty_kont has_ty_CESKP : core.
 
-(*
-Lemma has_ty_val_store_add_next : forall ST v t t',
-  store_wf ST ->
-  has_ty_val ST v t ->
-  has_ty_val (store_add_next ST t') v t.
-Proof.
-  intros ST v t t' Hwf Htyv.
-  inversion Htyv; eauto.
-Qed.
-*)
-
 Lemma has_ty_env_store_add_new : forall ST a t E G,
   store_wf ST ->
   lookup_store ST a = None ->
@@ -704,68 +601,11 @@ Proof.
 Qed.
 
 Global Hint Resolve
-  has_ty_env_store_add_new
   has_ty_val_store_add
+  has_ty_env_store_add_new
   has_ty_store_add
   has_ty_store_add_new
-  (*has_ty_val_store_add_next
-  has_ty_env_store_add_next*)
   has_ty_env_add_var : core.
-
-(*
-Lemma has_ty_store_add_next : forall St v ST t,
-  has_ty_store St ST ->
-  has_ty_val ST v t ->
-  has_ty_store (store_add_next St v) (store_add_next ST t).
-Proof.
-  intros St v ST t Hstore Htyv.
-  inversion Hstore; subst.
-  assert (Pos.succ (st_next ST) <= Pos.succ (st_next St))%positive by lia.
-  econstructor; eauto.
-  intros a' t' Hlookup.
-  destruct (Pos.eq_dec a' (st_next ST)).
-  - subst.
-    rewrite lookup_store_add_eq in Hlookup.
-    injection Hlookup as ?; subst.
-    exists v.
-    split; auto.
-    rewrite Heq.
-    apply lookup_store_add_eq.
-  - rewrite lookup_store_add_neq in Hlookup by assumption.
-    apply Hstore in Hlookup as [v' [? ?]].
-    exists v'.
-    split; auto.
-    rewrite lookup_store_add_neq by lia.
-    assumption.
-Qed.
-
-Lemma has_ty_kont_store_add_next : forall ST n k t,
-  store_wf ST ->
-  has_ty_kont ST n k ->
-  has_ty_kont (store_add (store_alloc ST) (st_next ST) t) n k.
-Proof.
-  intros ST n k t Hwf Htyk.
-  induction Htyk; econstructor; eauto.
-Qed.
-
-Lemma has_ty_checkpoint_store_add_next : forall ST t P,
-  store_wf ST ->
-  has_ty_checkpoint ST P ->
-  has_ty_checkpoint (store_add (store_alloc ST) (st_next ST) t) P.
-Proof.
-  intros ST t P Hwf Hcheck.
-  inversion Hcheck; subst.
-  econstructor; [|apply has_ty_kont_store_add_next; eassumption].
-  eapply Forall2_impl; [|apply H].
-  intros [a v] t' [Hptr Htyv].
-  eauto.
-Qed.
-
-Global Hint Resolve
-  has_ty_store_add_next
-  has_ty_kont_store_add_next
-  has_ty_checkpoint_store_add_next : core.
-*)
 
 Lemma Forall2_nth_error_1 : forall {A B} P (l1 : list A) (l2 : list B),
   Forall2 P l1 l2 ->
@@ -986,46 +826,6 @@ Proof.
   - constructor.
   - constructor; eauto.
 Qed.
-
-(*
-Lemma reset_no_alloc : forall St chks,
-  st_next (do_reset St chks) = st_next St.
-Proof.
-  unfold do_reset.
-  intros St chks.
-  induction chks.
-  - reflexivity.
-  - destruct a.
-    apply IHchks.
-Qed.
-
-Lemma store_wf_reset : forall St chks ST ts,
-  has_ty_store St ST ->
-  Forall2 (fun '(a, v) t => has_ty_val ST (vPtr a) (tPtr t) /\ has_ty_val ST v t) chks ts ->
-  store_wf (do_reset St chks).
-Proof.
-  unfold store_wf.
-  intros St chks ST ts Hwf1 Hwf2 Hchks a Hle.
-  rewrite reset_no_alloc in Hle.
-  induction chks.
-  - auto.
-  - destruct a0 as [a' v].
-    inversion Hchks; subst.
-    destruct H1 as [Hptr ?].
-    cbn.
-    rewrite PositiveMapAdditionalFacts.gsspec.
-    destruct (PositiveMap.E.eq_dec a a').
-    + inversion Hptr; subst.
-      unfold lookup_store in H2.
-      rewrite Hwf2 in H2.
-      discriminate H2.
-    inversion Hptr; subst.
-    cbn in *.
-
-    + subst.
-  apply Hwf in Hle.
-  inversion Hcheck; subst.
-*)
 
 Lemma preservation : forall st1 st2 io1 io2,
   has_ty_CESKP st1 ->
