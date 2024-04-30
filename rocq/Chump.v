@@ -854,6 +854,23 @@ Proof.
   eauto.
 Qed.
 
+Lemma has_ty_store_do_reset : forall St ST k chks,
+  has_ty_store St ST ->
+  has_ty_checkpoint ST (k, chks) ->
+  has_ty_store (do_reset St chks) ST.
+Proof.
+  intros St ST k chks Hstore Hcheck.
+  inversion Hcheck; subst.
+  clear Hcheck.
+  induction H1.
+  - assumption.
+  - destruct x as [a v].
+    destruct H as [Hptr Hv].
+    inversion Hptr; subst.
+    cbn. 
+    eapply has_ty_store_add; eauto.
+Qed.
+
 Lemma preservation : forall st1 st2 io1 io2,
   has_ty_CESKP st1 ->
   step (st1, io1) (st2, io2) ->
@@ -930,6 +947,5 @@ Proof.
   - (* step_Reset *)
     inversion H8; subst.
     econstructor; eauto.
-    econstructor; eauto.
-    admit. (* has_ty_store do_reset *)
-Admitted.
+    eapply has_ty_store_do_reset; eauto.
+Qed.
