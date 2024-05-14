@@ -1,6 +1,6 @@
 ---
 documentclass: acmart
-classoption: acmlarge
+classoption: acmlarge,screen
 title: "CHUMP: A Mechanically Verified Implementation of Curricle"
 subtitle: "CMSC 838L --- Final Project Report"
 author:
@@ -24,9 +24,12 @@ header-includes: |
   \usepackage[utf8]{inputenc}
   \usepackage{syntax}
   \usepackage{float}
-  \acmConference[838L]{Proceedings of the First Occurrence of CMSC 838L}{Spring
-  2024}{College Park, Maryland, USA}
   \setcopyright{none}
+  \acmVolume{3}
+  \acmNumber{1}
+  \acmArticle{1}
+  \acmBooktitle{Proceedings of the First Occurrence of CMSC 838L}
+include-before: |
 numbersections: true
 ---
 
@@ -226,11 +229,6 @@ to restore the state of the machine as expected.
 \caption{The definitions of the IO events and log.}
 \label{io-log}
 \begin{verbatim}
-Variant event     := ePure       (M : CESKP)
-                   | eInput      (f : Z -> CESKP)
-                   | eOutput     (M : CESKP) (o : Z)
-                   | eCheckpoint (M : CESKP).
-
 Variant io_event  := io_in  (i : Z)
                    | io_out (i : Z)
                    | io_check
@@ -266,8 +264,13 @@ down significantly.
 
 Our semantics are built to handle only undo checkpointing, and we implicitly
 define all code as existing within atomic regions between checkpoints. Narrowing
-down the options in this manner gives a much smaller system, and hopefully
-simplifies the proof of the system later on.
+down the options in this manner gives a much smaller system, and was hoped to
+simplify the proof of the system later on. Currently, we have concerns that this
+choice in simplification may actually have caused unexpected complication: the
+way we structured our syntax and checkpoint system suggests that checkpoints can
+be _conditional_. This is atypical, and may end up causing more problems than it
+is worth. The authors cross their fingers for a happy outcome, but we do not
+hold our collective breath.
 
 
 # Challenges Encountered {#sec:challenges}
