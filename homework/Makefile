@@ -3,7 +3,13 @@ ASSIGNMENTS   := $(filter-out . ./common,$(shell find . -maxdepth 1 -type d))
 PDF_TARGETS   := $(patsubst %,%.pdf,$(ASSIGNMENTS))
 SOURCE_EXTS   := md bib csl
 SOURCE_FILES  := $(shell find ./common $(ASSIGNMENTS) -type f \( -iname $(shell echo $(SOURCE_EXTS:%=\\\*.%) | sed 's/ / -o -iname /g') \))
-PANDOC        := pandoc --citeproc --resource-path common/
+PANDOC_OPTS   ?= --citeproc \
+                 --resource-path common/ \
+                 --from=markdown \
+                 --csl=acm-sig-proceedings.csl \
+                 --template=default.tex \
+                 --citeproc
+PANDOC         = pandoc $(PANDOC_OPTS)
 
 .PHONY: no-target all clean clean-all help $(ASSIGNMENTS)
 .DEFAULT_GOAL: no-target
@@ -34,5 +40,5 @@ $(ASSIGNMENTS):
 	@$(MAKE) -f $(THIS_MAKEFILE) $@.pdf
 
 $(PDF_TARGETS): %.pdf: $(SOURCE_FILES)
-	$(PANDOC) --resource-path "$*" -f markdown "$(sort $(filter ./$*/%.md,$(SOURCE_FILES)))" -o "$@"
+	$(PANDOC) --resource-path "$*" "$(sort $(filter ./$*/%.md,$(SOURCE_FILES)))" -o "$@"
 	@echo "Built $@."

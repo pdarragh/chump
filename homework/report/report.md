@@ -1,21 +1,36 @@
 ---
-title: "CHUMP"
-subtitle: "Final Project Report"
+documentclass: acmart
+classoption: acmlarge
+title: "CHUMP: A Mechanically Verified Implementation of Curricle"
+subtitle: "CMSC 838L --- Final Project Report"
 author:
-- "Justin Frank"
-- "Pierce Darragh"
+- name: Justin Frank
+  email: jpfrank@umd.edu
+  affiliation:
+    institution: University of Maryland
+    city: College Park
+    state: MD
+    country: USA
+- name: Pierce Darragh
+  email: pdarragh@umd.edu
+  affiliation:
+    institution: University of Maryland
+    city: College Park
+    state: MD
+    country: USA
 indent: true
-geometry:
-- margin=1in
 bibliography: report.bib
-csl: citation-style.csl
 header-includes: |
   \usepackage[utf8]{inputenc}
   \usepackage{syntax}
   \usepackage{float}
+  \acmConference[838L]{Proceedings of the First Occurrence of CMSC 838L}{Spring
+  2024}{College Park, Maryland, USA}
+  \setcopyright{none}
+numbersections: true
 ---
 
-\noindent Curricle is an existing work that resolves some constraints in the
+Curricle is an existing work that resolves some constraints in the
 implementation of systems for batteryless energy-harvesting devices. The
 approach develops a new type system that encodes a first-class notion of
 idempotence that, when combined with inferred information about
@@ -32,8 +47,8 @@ in Rocq (formerly Coq). Unfortunately, this report details an as-yet-incomplete
 attempt at accomplishing this goal. This is due in large part to the fundamental
 difficulty of mechanical verification, but it may also be the case that the
 authors' choices early in the project development negatively impacted the
-long-term outcomes. We investigate these shortcomings and reflect on the future
-of this work.
+long-term outcomes. We investigate these shortcomings and reflect on the current
+status and potential future of this work.
 
 
 # Introduction
@@ -83,37 +98,36 @@ of improving the reliability of Curricle, we set out to mechanically verify the
 system using the Rocq theorem prover. However, because we found ourselves
 subjected to external time constraints and due to our lack of experience in
 mechanical verification, we removed some complexity from the type system to make
-the problem more tractable.
+the problem more tractable. Despite these simplifications, we experienced no
+shortage of setbacks and were unable to meet our goals.
 
 In this report, we:
 
-  * Explain the restricted system we chose to implement in lieu of the complete
-    Curricle specification.
-  * Describe the character of the proofs we wish to develop for this system.
-  * Discuss the challenges that prohibited the successful development of these
-    proofs, including:
-      * Issues present in or deriving from the original work.
-      * Issues derived from our choice of restricted system.
-  * Investigate the current status of the implementation.
-  * Make a plan for continuing this work.
+  * Explain the simplified system.
+  * Discuss challenges that prohibited successful development of the system.
+  * Describe the character of the proofs we wish to develop.
+  * Evaluate the current implementation.
+  * Make a plan for future work.
 
 
-# CHUMP
+# CHUMP {#sec:chump}
 
 The system supported by Curricle is built on top of Rust. This is useful to
 programmers because it makes the system easier to use, since it does not require
 a particularly strange toolchain. However, Rust features a complex memory use
 analysis as part of its type system. While this is a significant boon in favor
-of Rust's adoption as a low-level systems language, it significantly complicates
-the development of proofs (mechanical or otherwise) that use it.
+of Rust's adoption as a low-level systems language (and a bonus for Curricle),
+it significantly complicates the development of proofs --- mechanical or
+otherwise --- that use it.
 
-The extended Curricle report contains dozens of pages of semantics and proofs,
-and a not-insignificant portion of these is due, at least in part, to the
-underlying complexity of Rust's type system. The Curricle authors' choice to
-include this in their formalization is reasonable given the intended use case,
-but the complexity of the proofs was a significant cause for concern for these
-authors. We set about developing a new, smaller language primarily intended to
-reduce the complexity of the proofs we would later develop.
+The extended Curricle report (see \ref{sec:extended}) contains dozens of pages
+of semantics and proofs, and a not-insignificant portion of these is due, at
+least in part, to the underlying complexity of Rust's type system. The Curricle
+authors' choice to include this in their formalization is reasonable given the
+intended use case, but the complexity of the proofs was a significant cause for
+concern for these authors. We set about developing a new, smaller language
+primarily intended to reduce the complexity of the proofs we would later
+develop.
 
 
 ## Syntax
@@ -156,7 +170,7 @@ generalize loops, providing an indexed `break` command to terminate execution
 behavior). Our hope in cutting out so many features was to greatly simplify the
 mechanization of the system.
 
-## Semantics
+## Semantic Model
 
 \begin{figure}
 \begin{verbatim}
@@ -180,12 +194,12 @@ compared to others. A CESK-style abstract machine features four components:
   3. **S**tore --- A map of addresses to values.
   4. **K**ontinuation --- A context tracking what to do later.
 
-\noindent In addition to these traditional elements, we add a fifth:
+In addition to these traditional elements, we add a fifth:
 
   5. Check**P**oint --- A safe state to restore to after reboot.
 
-\noindent This gives us a CESK**P** machine. Figure \ref{eskp} shows the Rocq
-definitions of the E, S, K, and P components.
+This gives us a CESK**P** machine. Figure \ref{eskp} shows the Rocq definitions
+of the E, S, K, and P components.
 
 In our model, we have only two varieties of continuation: the empty
 continuation, denoted `kMt`, and the sequencing continuation, `kSeq`. The `kSeq`
@@ -208,7 +222,7 @@ to restore the state of the machine as expected.
 
 ## Input and Output
 
-\begin{figure}[b!]
+\begin{figure}
 \caption{The definitions of the IO events and log.}
 \label{io-log}
 \begin{verbatim}
@@ -238,6 +252,174 @@ machine on its own, and later encapsulate it within a broader context including
 the IO formalization. Figure \ref{io-log} shows the definitions.
 
 
+## Simplified Checkpointing
+
+Curricle supports multiple notions of checkpointing. Specifically, the authors
+support both JIT- and atomic-region-based views on checkpoint semantics, and
+the system is agnostic to the specific checkpoint implementation (e.g., undo vs.
+redo checkpointing). These axes of choice provide great flexibility for
+real-world systems, especially for a domain as varied as intermittent computing
+that employs devices and systems of all kinds.
+
+However, complexity is the enemy of mechanized verification, so we stripped it
+down significantly.
+
+Our semantics are built to handle only undo checkpointing, and we implicitly
+define all code as existing within atomic regions between checkpoints. Narrowing
+down the options in this manner gives a much smaller system, and hopefully
+simplifies the proof of the system later on.
+
+
+# Challenges Encountered {#sec:challenges}
+
+In the process of implementing this work, we experienced a number of challenges,
+many of which we have unfortunately not yet overcome.
+
+
+## Lack of Deep Comprehension {#sec:extended}
+
+When we began our effort to mechanically verify Curricle, we felt that we had a
+reasonable understanding of the system and how we would go about proving its
+correctness, and we thought that we could make significant headway with what we
+knew then. Yet as we got into the minutiae of the actual implementation, we
+found that our comprehension was actually quite shallow, and this proved to be a
+significant setback in accomplishing much of anything.
+
+We discovered the existence of an extended version of the Curricle paper,
+complete with many pages of semantics and proofs to explain the system in depth
+(which has been mentioned elsewhere, but its discovery originated here). Reading
+this extended paper allowed us to fill in the gaps in our knowledge, but
+unfortunately it filled in the gaps _too_ well; the extended paper is very long,
+and the formalism it describes is incredibly complex. When we began this project
+knowing only the abridged form of the system, we felt confident that we could
+verify a sizable portion of it. After discovering the depth of the complete
+specification, however, that goal seemed to get further from our grasp.
+
+To amend this discrepancy, we simplified our target system as much as possible
+while hopefully still retaining enough of the parts that make Curricle
+interesting, with the eventual goal of adding complexity back (\ref{sec:chump}).
+However, as of this writing, this reduced system remains unimplemented.
+
+
+## Lattices
+
+\begin{figure}
+\begin{verbatim}
+Class MeetSemiLattice (A : Type) :=
+  { meet : A -> A -> A
+
+  ; meet_commutative : forall x y,   meet x y          = meet y x
+  ; meet_associative : forall x y z, meet (meet x y) z = meet x (meet y z)
+  ; meet_idempotent  : forall x,     meet x x          = x }.
+
+Class MeetOrder {A : Set} `(@MeetSemiLattice A) :=
+  { pre             :  relation A
+  ; preorder        :: PreOrder pre
+  ; partial_order   :: PartialOrder eq pre
+  ; meet_consistent :  forall x y, pre x y <-> x = (meet x y) }.
+\end{verbatim}
+\caption{Class definitions for semi-lattices.}
+\label{lattice}
+\end{figure}
+
+Curricle's type system features a number of lattices; namely, the access
+qualifiers, idempotence qualifiers, and taintedness qualifiers are all described
+by the paper (whether in prose or by use of symbology such $\prec$, $\preceq$,
+$\curlywedge$, $\sqsubset$, $\sqsubseteq$, $\sqcup$, etc) as being lattices
+built from pre-order or partial order relations.
+
+To that end, these authors sought to formalize these structures by way of a
+generalized notion of lattices in Rocq. Our thinking was that, since so many
+lattices are used (i.e., more than 2), and since the proofs of the interesting
+parts of Curricle will need to explicitly refer to these relations, we would
+develop a general theory for them. This would enable reuse of proof techniques
+throughout our own proofs, but it would also reduce cognitive overhead.
+
+Unfortunately, it seems that Rocq has managed to completely forego a standard
+implementation of lattice proofs or classes, and, indeed, these authors were
+unable to locate a correct implementation of such structures _at all_. We found
+a paper describing a tactic to solve lattices [@LatticePaper], and what was
+seemingly an implementation of this paper [@LatticeGitHub]. We spent a while
+attempting to adapt this code to our needs. For example, the code implements
+custom classes for partial orders (among other things), but such classes are
+defined in the Rocq standard library, so we sought to adapt a new lattice
+definition based on those found in this repository.
+
+After much fiddling, we decided to develop our own (minimal) lattice
+implementation from scratch, derived from what we had found. We decided to only
+implement a semi-lattice (i.e., a lattice that only relates in one direction)
+and reorient the Curricle structures to fit within this definition. Our
+class definitions are shown in Figure \ref{lattice}. After this, we worked on
+implementing instances of this class for the Curricle structures we needed.
+
+Alas, for another obstacle then reared its head. Consider the definition of
+"subtyping" for idempotence:
+
+$$
+\frac{qAcc \preceq_{a} qAcc'}{\text{Id}(qAcc) \sqsubseteq \text{Id}(qAcc')}
+$$
+
+\medskip
+
+This seems simple enough: one idempotence qualifier is "less than or equal to"
+another if the first's constituent access qualifier is "less than or equal to"
+the second's. The access qualifiers are defined with the relations $\preceq_{a}$
+and $\sim_{a}$:
+
+$$
+\text{Ck} \preceq_{a} \text{Wt} \sim_{a} (\text{Wt}^{t}\oplus\text{Rd})
+\preceq_{a} (\text{Wt}\oplus\text{Rd})
+$$
+$$
+\text{Ck} \preceq_{a} \text{Rd} \sim_{a} (\text{Wt}\oplus\text{Rd}^t) \sim_{a}
+(\text{Wt}^{t}\oplus\text{Rd}^{t}) \preceq_{a} (\text{Wt}\oplus\text{Rd})
+$$
+
+\medskip
+
+The operator $\preceq_{a}$ denotes a transitive and reflexive relation comparing
+access qualifiers in the fashion typical of a partial order, and partial orders
+are often one of the foundational pieces of a lattice definition. Meanwhile, the
+operator $\sim_{a}$ represents a notion of "equivalence" among some of the
+access qualifiers. These cannot all be fit into the same lattice, because they
+violate some of the laws of how lattices operate --- namely, the presence of an
+equivalence means that the lattice operations cannot be commutative, and the
+partial order cannot be consistently reflexive.
+
+To solve this problem, we have decided to simplify access qualifiers in our
+mechanization. Our $\preceq_{a}$ relation is defined as:
+
+$$
+\text{Ck} \preceq_{a} \text{Wt}
+$$
+$$
+\text{Ck} \preceq_{a} \text{Rd}
+$$
+
+\medskip
+
+In other words, we have removed the $\oplus$-tagged qualifiers. This allows for
+viewing the relation through the perspective of a semi-lattice, and it also
+means we can move forward with the construction of proofs in terms of these
+structures.
+
+
+## Pointers
+
+Our original specification for CHUMP included pointer values, along with
+reference and dereference operators. We spent quite a bit of time mechanizing
+this version of the project, including completion of proofs of progress and
+preservation of the base type system. Unfortunately, as we moved from that point
+to attempting to integrate additional Curricle systems, it became clear that
+pointers and notions of ownership à la Rust really do make things hard when it
+comes to mechanized verification.
+
+To simplify our system (and hopefully render it tractable within the scope of a
+class project), we eventually threw out pointers and reference/dereference
+operations. We decided that if we can successfully prove the simpler system
+correct, these would be among the first features we would add back in.
+
+
 # Proof Set-Up
 
 Similar to Curricle, we develop a theory of correctness derived from the notion
@@ -264,58 +446,74 @@ can reconstitute a simulation of a continuous execution by discarding inputs and
 outputs from repeated regions of code (i.e., code that ran but did not reach a
 checkpoint prior to a power failure).
 
-TODO
+Unfortunately, we did not manage to specify our proofs in Rocq. This is due to
+the system not being fully implemented (\ref{sec:challenges}, \ref{sec:eval}).
+It seemed not worth the effort of writing down the proof statements if we did
+not yet have the underlying system built, since the proof statements must be
+written in terms of that system.
 
 
-# Challenges Encountered
+# Evaluation {#sec:eval}
 
-In the process of implementing this work, we experienced a number of challenges,
-many of which we have not yet overcome. We group our challenges in two
-categories: those due to issues present in the original work or our
-comprehension thereof, and those due to our own choices.
+When we began this work, we set evaluation goals we believed to be reasonable
+[@PM2]. We now consider whether we have met these goals.
 
 
-## Curiosities of Curricle
+**A full specification of the syntax and semantics of CHUMP.** Although the
+syntax has been solidified and much of the semantics defined, it is not
+completely encoded in Rocq. We began this project by working on this and the
+(revised) Curricle type system at the same time, but as the end of the semester
+approached we focused more and more on the Curricle types rather than the base
+system. We feel that this was the right choice, considering the implementation
+of the Curricle system is the express purpose of the project, though it is
+disappointing not to have completed this.
 
-As noted previously, the design of the Curricle system is very complex due to
-the authors catering to a smörgåsbord of considerations. However, despite
-simplifying the system greatly, we found some parts very difficult to adapt.
+**Basic Curricle type system.** We have made significant headway relative to
+where we began, including an implementation of the underlying type system
+_beneath_ Curricle, but we have experienced setbacks at seemingly every possible
+opportunity in the implementation of the more complex features
+(\ref{sec:challenges}). The (re-)implementation of a complex system in a
+theorem-proving language is not straightforward, as it turns out, and we
+severely underestimated the effort it would take to accomplish our goals.
 
-In the first place, the Curricle paper regularly uses syntax for various
-algebraic structures, such as partial orders, pre-orders, and lattices, in
-addition to symbology traditionally used in the description of type systems.
-However, these authors found the notations used to be somewhat deceptive.
+**Proofs of correctness started, if not proven.** Although we have produced
+verified proofs of progress and preservation for the base type system, these
+were not the proofs we had been particularly interested in writing. In fact, we
+have not even formally specified the intended proof statements in Rocq, which
+was a lesser form of this goal we had previously set. But this is not without
+reason. Without the completed Rocq implementation of the Curricle system, it is
+nearly impossible to actually phrase the proofs to any significant degree.
+Anything we write is no better than a prose statement of intent, and we do not
+see much point in spending effort on this while the base system remains
+incomplete.
 
-For example, the paper defines the following relation:
+**Further goals.** In addition to our base goals, we had set a number of
+additional goals we wanted to reach. Considering the state of everything else,
+these authors feel it not worth expanding on the further aims that we also did
+not satisfy.
 
-$$
-\frac{qAcc \preceq_{a} qAcc'}{\text{Id}(qAcc) \sqsubseteq \text{Id}(qAcc')}
-$$
 
-This seems simple enough: one idempotence qualifier is "less than or equal to"
-another if the first's constituent access qualifier is "less than or equal to"
-the second's. The paper text accompanying the use of $\preceq_{a}$ describes the
-access qualifier as belonging to a lattice, but they are defined as a partial
-order:
+# Future Work
 
-$$
-\text{Ck} \preceq_{a} \text{Wt} \sim_{a} (\text{Wt}^{t}\oplus\text{Rd})
-\preceq_{a} (\text{Wt}\oplus\text{Rd})
-$$
-$$
-\text{Ck} \preceq_{a} \text{Rd} \sim_{a} (\text{Wt}\oplus\text{Rd}^t) \sim_{a}
-(\text{Wt}^{t}\oplus\text{Rd}^{t}) \preceq_{a} (\text{Wt}\oplus\text{Rd})
-$$
+The most pressing issue for this work is the successful implementation of the
+basic Curricle type system. We believe that if this were to be completed
+successfully and proofs of correctness satisfied, the additional features would
+be significantly more straightforward to implement. In other words, CHUMP is
+very front-loaded in terms of programmer effort, and while we do not believe the
+rest of the project would necessarily be "easy", it seems reasonable to expect
+it would be a much quicker process.
 
-We decided to simplify access qualifiers in our mechanization, though, so we
-have instead:
 
-$$
-\text{Ck} \preceq_{a} \text{Wt}
-$$
-$$
-\text{Ck} \preceq_{a} \text{Rd}
-$$
+## Conclusion
+
+Regretfully, we must admit defeat. The CHUMP system remains incomplete and our
+desired proofs unproven. However, we feel that we have learned a lot through
+this endeavor. Some brief takeaways:
+
+  * Mechanized formal verification is hard.
+  * Deep understanding of the entire system beforehand is necessary.
+  * Papers often do not specify things in the way we might like.
+  * Mechanized formal verification is hard.
 
 
 # References
